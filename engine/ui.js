@@ -6,23 +6,24 @@ const D2R = Math.PI / 180;
 const WHITE = [240, 240, 232], GOLD = [255, 220, 90], GREY = [150, 146, 138], RED = [200, 16, 16];
 
 export class UI {
-  constructor(g) { this.g = g; this.msg = null; this.file = null; this.menu = null; this.movie = null; this.icons = null; }
+  constructor(g) { this.g = g; this.msg = null; this.file = null; this.menu = null; this.movie = null; this.icons = null; this.boxUI = null; }
   get F() { return this.g.A.font; }
   get fb() { return this.g.fb; }
   get items() { return this.g.A.content.items; }
 
   // ---------------------------------------------------------------- messages
-  say(lines, then) { this.msg = { lines: [].concat(lines), shown: 0, page: 0, then }; }
+  say(lines, then, who) { this.msg = { lines: [].concat(lines), shown: 0, page: 0, then, who }; }
   ask(q, yes, no) { this.msg = { lines: [q], shown: 0, page: 0, choice: 0, yes, no }; }
   readFile(id, page = 0) { this.file = { id, page }; }
-  modal() { return !!(this.msg || this.file || this.menu || this.movie); }
+  modal() { return !!(this.msg || this.file || this.menu || this.movie || this.boxUI); }
 
   update(I) {
     const g = this.g;
     if (this.movie) { if (I.confirmPressed || I.cancelPressed || this.movie.done) { this.movie.stop?.(); this.movie = null; } return true; }
     if (this.file) return this.updateFile(I), true;
-    if (this.menu) return this.updateMenu(I), true;
     if (this.msg) return this.updateMsg(I), true;
+    if (this.menu) return this.updateMenu(I), true;
+    if (this.boxUI) return this.updateBox(I), true;
     return false;
   }
   updateMsg(I) {
@@ -77,6 +78,13 @@ export class UI {
       return;
     }
     const n = g.slots;
+    if (M.combine !== undefined && M.combine !== null) {
+      if (I.leftPressed || I.rightPressed) { M.sel ^= 1; g.sfx('cursor'); }
+      if (I.upPressed) { M.sel = (M.sel + n - 2) % n; g.sfx('cursor'); }
+      if (I.downPressed) { M.sel = (M.sel + 2) % n; g.sfx('cursor'); }
+      if (I.confirmPressed) { const a = M.combine; M.combine = null; if (S.inventory[M.sel] && M.sel !== a) this.combine(a, M.sel); else g.sfx('cursor'); }
+      return;
+    }
     if (M.sub) {
       if (I.upPressed || I.downPressed) { M.sub.sel = (M.sub.sel + M.sub.opts.length + (I.upPressed ? -1 : 1)) % M.sub.opts.length; g.sfx('cursor'); }
       if (I.confirmPressed) {
@@ -84,9 +92,15 @@ export class UI {
         M.sub = null; g.sfx('confirm');
         if (opt === 'EQUIP') { S.equipped = it.id; g.player.updateHide(); }
         if (opt === 'USE') {
-          if (def.kind === 'heal') { g.player.heal(def.heal); S.consume(it.id, 1); }
+          if (def.kind === 'heal') {
+            if (def.heal) g.player.heal(def.heal);
+            if (def.cure) { S.infection = Math.max(0, (S.infection || 0) - def.cure); g.sfx('heal'); }
+            S.consume(it.id, 1);
+          }
           if (def.kind === 'save') this.say(['Use it at a typewriter.']);
+          if (def.kind === 'key' || def.kind === 'tool') g.useItem(it.id);
         }
+        if (opt === 'COMBINE') M.combine = M.sel;
         if (opt === 'CHECK') M.check = { id: it.id, t: 0 };
         if (opt === 'READ') { this.readFile(def.file); S.files[def.file] = true; }
       }
@@ -97,12 +111,112 @@ export class UI {
     if (I.downPressed) { M.sel = (M.sel + 2) % n; g.sfx('cursor'); }
     if (I.confirmPressed && S.inventory[M.sel]) {
       const def = this.items[S.inventory[M.sel].id];
+      const id = S.inventory[M.sel].id;
       const opts = def.kind === 'weapon' ? ['EQUIP', 'CHECK'] : def.kind === 'file' ? ['READ', 'CHECK'] :
-        def.kind === 'heal' || def.kind === 'save' ? ['USE', 'CHECK'] : ['CHECK'];
+        ['heal', 'save', 'key', 'tool'].includes(def.kind) ? ['USE', 'CHECK'] : ['CHECK'];
+      if (this.combinable(id)) opts.splice(opts.length - 1, 0, 'COMBINE');
       M.sub = { sel: 0, opts };
       g.sfx('cursor');
     }
   }
+  // ---------------------------------------------------------------- combining (herbs, loading ammo)
+  recipes() { return this.g.A.content.game.recipes || []; }
+  combinable(id) {
+    const d = this.items[id];
+    if (d.weapon?.ammo || d.kind === 'ammo') return true;
+    return this.recipes().some(r => r[0] === id || r[1] === id);
+  }
+  combine(a, b) {
+    const g = this.g, S = g.state, A = S.inventory[a], B = S.inventory[b], da = this.items[A.id], db = this.items[B.id];
+    // ammo + its weapon = load it
+    const [w, am] = da.weapon ? [A, B] : db.weapon ? [B, A] : [null, null];
+    if (w && this.items[w.id].weapon.ammo === am.id) {
+      const W = this.items[w.id].weapon, k = Math.min(W.mag - (S.mag[w.id] || 0), am.n);
+      if (k <= 0) return this.say(["It's already fully loaded."]);
+      S.mag[w.id] = (S.mag[w.id] || 0) + k; S.consume(am.id, k); g.player.sync(); g.sfx('reload');
+      return;
+    }
+    const r = this.recipes().find(r => (r[0] === A.id && r[1] === B.id) || (r[0] === B.id && r[1] === A.id));
+    if (!r) { g.sfx('locked'); return this.say(["They can't be combined."]); }
+    const ida = A.id, idb = B.id;
+    S.consume(ida, 1); S.consume(idb, 1);
+    const at = Math.min(a, b, S.inventory.length);
+    const stack = S.inventory.find(i => i.id === r[2]);
+    if (stack) stack.n += 1; else S.inventory.splice(at, 0, { id: r[2], n: 1 });
+    g.sfx('combine');
+    this.say([`Combined into the ${this.items[r[2]].name}.`]);
+  }
+
+  // ---------------------------------------------------------------- item box (shared across the game, like RE2's)
+  openBox() { this.g.state.box ||= []; this.boxUI = { side: 0, isel: 0, bsel: 0 }; }
+  updateBox(I) {
+    const B = this.boxUI, g = this.g, S = g.state, box = S.box, n = g.slots;
+    if (I.cancelPressed || I.menuPressed) { this.boxUI = null; g.sfx('box'); return; }
+    if (I.leftPressed || I.rightPressed) { B.side ^= 1; g.sfx('cursor'); }
+    if (I.upPressed || I.downPressed) {
+      const d = I.downPressed ? 1 : -1;
+      if (B.side === 0) B.isel = (B.isel + n + d) % n; else B.bsel = Math.max(0, Math.min(box.length - 1, B.bsel + d));
+      g.sfx('cursor');
+    }
+    if (!I.confirmPressed) return;
+    if (B.side === 0) {
+      const it = S.inventory[B.isel];
+      if (!it) return;
+      const def = this.items[it.id];
+      if (def.no_box) return this.say(["You'd better keep it on you."]);
+      const stack = def.kind !== 'weapon' && box.find(b => b.id === it.id);
+      if (stack) stack.n += it.n; else box.push({ id: it.id, n: def.weapon ? S.mag[it.id] ?? it.n : it.n });
+      S.inventory.splice(B.isel, 1);
+      if (S.equipped === it.id) { S.equipped = null; g.player.updateHide(); }
+      g.sfx('confirm');
+    } else {
+      const b = box[B.bsel];
+      if (!b) return;
+      const def = this.items[b.id];
+      if (!S.add(b.id, b.n, this.items, n)) return this.say(['There is no more room to carry anything.']);
+      if (def.weapon) { S.mag[b.id] = b.n; if (!S.equipped) { S.equipped = b.id; g.player.updateHide(); } }
+      box.splice(B.bsel, 1);
+      B.bsel = Math.max(0, Math.min(B.bsel, box.length - 1));
+      g.sfx('confirm');
+    }
+  }
+  drawBox() {
+    const fb = this.fb, F = this.F, g = this.g, S = g.state, B = this.boxUI, box = S.box;
+    PSX.darken(fb, 0.2); PSX.tintScreen(fb, 0, 10, 40, 0.5);
+    F.draw(fb, 'ITEMS', 16, 6, B.side === 0 ? GOLD : GREY);
+    F.draw(fb, 'ITEM BOX', 168, 6, B.side === 1 ? GOLD : GREY);
+    for (let k = 0; k < g.slots; k++) {
+      const x = 8 + (k % 2) * 72, y = 20 + Math.floor(k / 2) * 44;
+      this.box(x, y, 68, 42, [0, 0, 0], 0.9, B.side === 0 && k === B.isel ? GOLD : [110, 110, 104]);
+      const it = S.inventory[k];
+      if (!it) continue;
+      PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
+      const def = this.items[it.id];
+      if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
+    }
+    this.box(160, 20, 152, 176, [0, 0, 0], 0.9, B.side === 1 ? GOLD : [110, 110, 104]);
+    const top = Math.max(0, Math.min(B.bsel - 5, box.length - 12));
+    box.slice(top, top + 12).forEach((b, i) => {
+      const k = top + i, def = this.items[b.id], sel = B.side === 1 && k === B.bsel;
+      F.draw(fb, (sel ? '> ' : '  ') + def.name, 166, 26 + i * 14, sel ? GOLD : [210, 206, 190]);
+      if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(b.n), 292, 26 + i * 14, [230, 230, 120]);
+    });
+    if (!box.length) F.draw(fb, '  (empty)', 166, 26, GREY);
+    const cur = B.side === 0 ? S.inventory[B.isel] : box[B.bsel];
+    this.box(8, 200, 304, 34, [0, 0, 0], 0.9);
+    if (cur) { const def = this.items[cur.id]; F.draw(fb, def.name, 16, 203, GOLD); F.draw(fb, this.wrap(def.desc, 290)[0] || '', 16, 217, [200, 200, 190]); }
+  }
+
+  // location / chapter title card, fading in and out over the scene
+  drawCard(c) {
+    const k = Math.max(0, Math.min(1, c.t / 0.8, (c.dur - c.t) / 0.8));
+    if (k <= 0) return;
+    const col = (v) => [v[0] * k, v[1] * k, v[2] * k];
+    PSX.darken(this.fb, 1 - 0.45 * k);
+    this.center(c.text, 104, col([235, 230, 220]), 2);
+    if (c.sub) this.center(c.sub, 132, col([190, 40, 30]));
+  }
+
   fileList() {
     const S = this.g.state, files = this.g.A.content.files;
     const ids = new Set(Object.keys(S.files));
@@ -127,13 +241,15 @@ export class UI {
   center(s, y, col = WHITE, scale = 1) { this.F.draw(this.fb, s, 160 - (this.F.width(s) * scale >> 1), y, col, scale); }
 
   drawOverlays() {
-    if (this.menu) this.drawMenu();
+    if (this.boxUI) { this.drawBox(); if (this.msg) this.drawMsg(); return; }
+    if (this.menu) { this.drawMenu(); if (this.msg) this.drawMsg(); return; }
     else if (this.file) this.drawFile();
     else if (this.msg) this.drawMsg();
   }
   drawMsg() {
     const m = this.msg, F = this.F;
     this.box(8, 186, 304, 48);
+    if (m.who) { const w = F.width(m.who) + 12; this.box(8, 172, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, m.who, 14, 175, GOLD); }
     const lines = this.wrap(m.lines[m.page].slice(0, Math.floor(m.shown)), 290);
     lines.slice(0, 3).forEach((l, i) => F.draw(this.fb, l, 16, 191 + i * 13));
     if (m.choice !== undefined && m.shown >= m.lines[m.page].length) {
@@ -193,6 +309,12 @@ export class UI {
       PSX.rect(fb, 16 + i, Math.min(y0, y1), 1, Math.abs(y1 - y0) + 2, col[0] * k, col[1] * k, col[2] * k);
     }
     F.draw(fb, st, 16, 72, col);
+    const inf = S.infection || 0;
+    if (inf > 0) {                                                      // the bite, spreading
+      F.draw(fb, 'INFECTION', 76, 72, [190, 90, 200]);
+      PSX.rect(fb, 16, 84, 134, 2, 40, 0, 40);
+      PSX.rect(fb, 16, 84, Math.round(134 * inf / 100), 2, 190, 60, 210);
+    }
     // equipped
     this.box(8, 94, 150, 56, [0, 0, 0], 0.9);
     F.draw(fb, 'EQUIPPED', 16, 98, [200, 200, 190]);
@@ -202,6 +324,8 @@ export class UI {
       F.draw(fb, w.ammo ? `${S.mag[S.equipped] ?? 0} / ${S.count(w.ammo)}` : `${S.mag[S.equipped] ?? 0}`, 90, 126, [230, 230, 120]);
     }
     F.draw(fb, g.room.name, 10, 158, [170, 170, 160]);
+    const held = Object.keys(S.held || {}).map(id => this.items[id]?.name).filter(Boolean);
+    if (held.length) F.draw(fb, 'CARRYING: ' + held.join(', '), 10, 170, [120, 200, 170]);
     // item grid (2 x rows)
     for (let k = 0; k < g.slots; k++) {
       const x = 170 + (k % 2) * 72, y = 8 + Math.floor(k / 2) * 44;
@@ -210,7 +334,8 @@ export class UI {
       if (!it) continue;
       PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
       const def = this.items[it.id];
-      if (def.kind !== 'file' && def.kind !== 'key') F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
+      if (def.kind !== 'file' && def.kind !== 'key' && def.kind !== 'tool') F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
+      if (M.combine === k) this.box(x + 1, y + 1, 66, 40, [0, 0, 0], 0, [120, 220, 255]);
       if (S.equipped === it.id) F.draw(fb, 'E', x + 4, y + 28, [120, 220, 255]);
     }
     this.box(8, 180, 304, 42, [0, 0, 0], 0.9);
@@ -220,6 +345,7 @@ export class UI {
       F.draw(fb, def.name, 16, 183, GOLD);
       this.wrap(def.desc, 290).slice(0, 2).forEach((l, i) => F.draw(fb, l, 16, 196 + i * 12));
     }
+    if (M.combine !== undefined && M.combine !== null) F.draw(fb, 'COMBINE WITH?', 170, 170, GOLD);
     if (M.sub) {
       const x = 170 + (M.sel % 2) * 72 + 30, y = 8 + Math.floor(M.sel / 2) * 44 + 8;
       this.box(x, y, 60, 8 + M.sub.opts.length * 13, [20, 20, 30], 0.97, [255, 220, 90]);
@@ -286,15 +412,17 @@ export class UI {
     }
     nodes.forEach((nd, i) => {
       const [x, y] = nd.at, sel = i === M.node, cur = i === here;
-      const col = cur ? (Math.floor(g.time * 3) % 2 ? [255, 80, 60] : [255, 200, 120]) : nd.status === 'built' ? [220, 200, 140] : [120, 120, 100];
+      const known = i <= here;                                   // the road ahead stays unknown
+      const col = cur ? (Math.floor(g.time * 3) % 2 ? [255, 80, 60] : [255, 200, 120]) : known ? [220, 200, 140] : [120, 120, 100];
       PSX.rect(fb, x - 3, y - 3, 7, 7, ...col);
-      if (nd.status !== 'built' && nd.status !== 'story' && !cur) PSX.rect(fb, x - 2, y - 2, 5, 5, 18, 22, 14);
+      if (!known) PSX.rect(fb, x - 2, y - 2, 5, 5, 18, 22, 14);
       if (sel) { PSX.rect(fb, x - 5, y - 5, 11, 1, ...GOLD); PSX.rect(fb, x - 5, y + 5, 11, 1, ...GOLD); }
     });
     const nd = nodes[M.node];
     this.box(14, 180, 292, 36, [0, 0, 0], 0.85, [120, 130, 90]);
-    F.draw(fb, nd.label + (nd.status === 'planned' ? '   (not yet built)' : ''), 20, 184, GOLD);
-    if (nd.note) F.draw(fb, nd.note, 20, 199, [200, 196, 180]);
+    const known = M.node <= here;
+    F.draw(fb, known ? nd.label : '???', 20, 184, GOLD);
+    if (known && nd.note) F.draw(fb, nd.note, 20, 199, [200, 196, 180]);
   }
   drawFiles() {
     const fb = this.fb, F = this.F, M = this.menu, files = this.fileList(), docs = this.g.A.content.files;
@@ -374,9 +502,19 @@ export class UI {
     if (t < 2) return;
     ch.text.forEach((l, i) => this.center(l, 30 + i * 15, [200, 196, 186]));
     const y = 40 + ch.text.length * 15;
+    const t2 = Math.floor(S.time), tm = `${Math.floor(t2 / 3600)}:${String(Math.floor(t2 / 60) % 60).padStart(2, '0')}:${String(t2 % 60).padStart(2, '0')}`;
+    if (ch.final) {                                                   // RE-style results and rank
+      this.center('THE END', y, [200, 20, 20], 2);
+      const acc = S.stats.shots ? Math.round(100 * S.stats.kills / S.stats.shots) : 0;
+      const pts = (t2 < 5400 ? 2 : t2 < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
+      const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
+      this.center(`CLEAR TIME ${tm}    SAVES ${S.saves}    KILLS ${S.stats.kills}`, y + 30, [190, 186, 170]);
+      this.center(`RANK  ${rank}`, y + 50, [255, 220, 90], 2);
+      if (t > 5) this.center('PRESS ENTER', y + 80, [120, 120, 120]);
+      return;
+    }
     this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', y, [200, 20, 20]);
-    const t2 = Math.floor(S.time);
-    this.center(`Time ${Math.floor(t2 / 60)}:${String(t2 % 60).padStart(2, '0')}    Shots ${S.stats.shots}    Kills ${S.stats.kills}    Saves ${S.saves}`, y + 22, [170, 166, 150]);
+    this.center(`Time ${tm}    Shots ${S.stats.shots}    Kills ${S.stats.kills}    Saves ${S.saves}`, y + 22, [170, 166, 150]);
     if (t > 4) this.center('PRESS ENTER', y + 46, [120, 120, 120]);
   }
 }

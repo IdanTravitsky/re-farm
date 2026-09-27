@@ -3,11 +3,16 @@
 // content/locations/<id>/location.json.
 //
 // Trigger events: new_game, enter_room{room}, zone{room, rect}, enemies_dead{ids, mode},
-//                 pickup{id}, flag{flag}
+//                 pickup{id}, flag{flag}, enemy_hp{id, below}, enemy_dead{id}, unlock{door},
+//                 use_item{item, id}
 // Conditions:     {flag} {not} {all:[]} {any:[]} {has} {taken} {dead} {room} {equipped}
-// Actions:        say, set, unset, give, take_item, read, spawn, transform, remove, sfx, music,
-//                 shake, whiteout, wait, run, if, chapter_end, goto_room, camera, cinematic,
-//                 actor, heal, damage, movie
+//                 {visited} {unlocked: door} {infection: min} {hp_below: n}
+// Actions:        say (string | [lines] | {who, text}), set, unset, give, take_item, read, spawn,
+//                 transform, remove, sfx, music (null = back to the room's), shake, whiteout,
+//                 wait, run, if, chapter_end, goto_room, camera (null = zones), cinematic, actor,
+//                 heal, damage, movie, fade {out|in: secs}, title_card {text, sub, t},
+//                 unlock / lock (door id), infect (add) / infect_rate (per sec), wake (enemy ids),
+//                 enemy {id, state?, hp?}, card_wait
 
 export function check(cond, g) {
   if (!cond) return true;
@@ -23,6 +28,10 @@ export function check(cond, g) {
   if ('dead' in cond) ok &&= [].concat(cond.dead).every(e => !!S.dead[e]);
   if ('room' in cond) ok &&= S.room === cond.room;
   if ('equipped' in cond) ok &&= S.equipped === cond.equipped;
+  if ('visited' in cond) ok &&= [].concat(cond.visited).every(r => !!S.visited[r]);
+  if ('unlocked' in cond) ok &&= [].concat(cond.unlocked).every(d => !!S.flags['door:' + d]);
+  if ('infection' in cond) ok &&= (S.infection || 0) >= cond.infection;
+  if ('hp_below' in cond) ok &&= S.hp < cond.hp_below;
   return ok;
 }
 
@@ -39,10 +48,11 @@ export class Script {
     if (!L) return;
     for (const t of L.triggers || []) {
       if (t.on.event !== event) continue;
-      if (t.once !== false && this.g.state.fired[t.id]) continue;
+      const key = L.id + ':' + t.id;                              // trigger ids are per location
+      if (t.once !== false && this.g.state.fired[key]) continue;
       if (!this.matches(t.on, info)) continue;
       if (!check(t.if, this.g)) continue;
-      if (t.once !== false) this.g.state.fired[t.id] = true;
+      if (t.once !== false) this.g.state.fired[key] = true;
       this.start(t.do, t.id);
     }
   }
@@ -53,6 +63,10 @@ export class Script {
       case 'enemies_dead': return false;                          // polled in tick()
       case 'pickup': return on.id === info.id;
       case 'flag': return on.flag === info.flag;
+      case 'enemy_hp': return on.id === info.id && info.hp <= (on.below ?? 0);
+      case 'enemy_dead': return on.id === info.id;
+      case 'unlock': return !on.door || on.door === info.door;
+      case 'use_item': return (!on.item || on.item === info.item) && (!on.id || on.id === info.id);
       default: return true;
     }
   }
@@ -61,7 +75,8 @@ export class Script {
     const g = this.g, L = g.location, S = g.state, p = g.player;
     if (!L || !p) return;
     for (const t of L.triggers || []) {
-      if (t.once !== false && S.fired[t.id]) continue;
+      const key = L.id + ':' + t.id;
+      if (t.once !== false && S.fired[key]) continue;
       const on = t.on;
       let hit = false;
       if (on.event === 'zone') {
@@ -72,7 +87,7 @@ export class Script {
         hit = on.mode === 'any' ? dead > 0 : dead === on.ids.length;
       }
       if (!hit || !check(t.if, g)) continue;
-      if (t.once !== false) S.fired[t.id] = true;
+      if (t.once !== false) S.fired[key] = true;
       this.start(t.do, t.id);
     }
   }
@@ -82,7 +97,7 @@ export class Script {
   update(dt) {
     for (const c of this.running) {
       if (c.done) continue;
-      if (c.wait > 0) { c.wait -= dt; if (c.wait > 0) continue; }
+      if (c.wait > 0) { c.wait -= dt; if (c.wait > 0) continue; c.wait = 0; }
       if (c.block && !this.unblocked(c)) continue;
       c.block = null;
       this.step(c);
@@ -96,6 +111,8 @@ export class Script {
       case 'file': return !g.ui.file;
       case 'actor': return !c.actor || c.actor.arrived;
       case 'movie': return !g.ui.movie;
+      case 'fade': return g.fx.fade === g.fx.fadeTo;
+      case 'card': return !g.fx.card;
       default: return true;
     }
   }
@@ -115,7 +132,9 @@ export class Script {
     const g = this.g, S = g.state;
     const k = Object.keys(a)[0], v = a[k];
     switch (k) {
-      case 'say': g.ui.say([].concat(v)); c.block = 'msg'; break;
+      case 'say':
+        if (v && v.text) g.ui.say([].concat(v.text), null, v.who); else g.ui.say([].concat(v));
+        c.block = 'msg'; break;
       case 'set': [].concat(v).forEach(f => { if (!S.flags[f]) { S.flags[f] = true; this.fire('flag', { flag: f }); } }); break;
       case 'unset': [].concat(v).forEach(f => delete S.flags[f]); break;
       case 'give': g.give(v[0], v[1] ?? 1); break;
@@ -125,7 +144,7 @@ export class Script {
       case 'remove': [].concat(v).forEach(id => g.removeEnemy(id)); break;
       case 'transform': g.transform(v); break;
       case 'sfx': g.sfx(v); break;
-      case 'music': g.music.play(v); break;
+      case 'music': g.musicOverride = v === null ? undefined : v; g.updateMusic(); break;
       case 'shake': g.fx.shake = v; break;
       case 'whiteout': g.fx.whiteout = v; break;
       case 'wait': c.wait = v; break;
@@ -133,7 +152,7 @@ export class Script {
       case 'if': if (!check(v, g)) return 'stop'; break;
       case 'chapter_end': g.chapterEnd(v); return 'stop';
       case 'goto_room': g.gotoRoom(v.room, v.at, v.yaw ?? 0, v.transition || 'fade'); break;
-      case 'camera': g.forcedCamera = v; break;
+      case 'camera': g.forcedCamera = v; if (!v) g.cam = -1, g.updateCamera(); else g.updateCamera(); break;
       case 'cinematic': g.cinematic = !!v; break;                // player input off, letterbox on
       case 'actor': {
         const act = v.id === 'player' ? g.player : g.enemies.find(e => e.id === v.id);
@@ -143,6 +162,26 @@ export class Script {
       case 'heal': g.player.heal(v); break;
       case 'damage': g.player.hurt(v); break;
       case 'movie': g.ui.playMovie(v); c.block = 'movie'; break;
+      case 'fade': {
+        const out = 'out' in v, secs = (out ? v.out : v.in) || 0.001;
+        g.fx.fadeTo = out ? 1 : 0; g.fx.fadeRate = 1 / secs;
+        if (!v.nowait) c.block = 'fade';
+        break;
+      }
+      case 'title_card': g.titleCard(v); if (v.wait !== false) c.block = 'card'; break;
+      case 'unlock': [].concat(v).forEach(d => g.unlockDoor(d, true)); break;
+      case 'lock': [].concat(v).forEach(d => g.unlockDoor(d, false)); break;
+      case 'infect': S.infection = Math.max(0, Math.min(100, (S.infection || 0) + v)); break;
+      case 'infect_rate': S.infect_rate = v; break;
+      case 'wake': [].concat(v).forEach(id => { const e = g.enemies.find(x => x.id === id); if (e && e.state === 'perched') e.update(); if (e) { e.hidden = false; if (['idle', 'perched'].includes(e.state)) e.state = 'chase'; } }); break;
+      case 'enemy': {
+        const e = g.enemies.find(x => x.id === v.id);
+        if (e && v.pose !== undefined) e.poseName = v.pose || undefined;
+        if (e && v.hide) e.hide = new Set(v.hide);
+        if (e && v.pose !== undefined) e.staticPose = v.pose ? this.g.A.poses[e.def.model]?.[v.pose] || null : null;
+        if (e) { if (v.hp !== undefined) e.hp = v.hp; if (v.state) { e.state = v.state; e.t = 0; if (v.anim) e.anim.play(v.anim, { restart: true }); } if (v.hidden !== undefined) e.hidden = v.hidden; }
+        break;
+      }
       default: console.warn('unknown action', k, v);
     }
   }

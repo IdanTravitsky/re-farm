@@ -59,7 +59,7 @@ export class Model {
   }
 }
 
-// world-from-part matrices (mm) for a pose {part: [rx,ry,rz], _root: [dx,dy,dz]}
+// world-from-part matrices (mm) for a pose {part: [rx,ry,rz(,tx,ty,tz)], _root: [dx,dy,dz]}
 export function partMatrices(model, pose) {
   const mats = [];
   const root = pose._root || [0, 0, 0];
@@ -67,6 +67,7 @@ export function partMatrices(model, pose) {
     const r = pose[p.name] || [0, 0, 0];
     let off = p.offset;
     if (p.parent < 0) off = [off[0] + root[0], off[1] + root[1], off[2] + root[2]];
+    if (r.length > 3) off = [off[0] + r[3], off[1] + r[4], off[2] + r[5]];     // sliding parts (elevator leaves)
     const local = mat4(rotXYZ(r[0], r[1], r[2]), off);
     mats.push(p.parent >= 0 ? mul4(mats[p.parent], local) : local);
   }
@@ -193,6 +194,7 @@ export function render(fb, cam, instances, lights, otBits = 12) {
     for (let pi = 0; pi < m.parts.length; pi++) {
       const part = m.parts[pi];
       if (part.nv === 0 || (inst.hide && inst.hide.has(part.name))) continue;
+      const ptint = (inst.partTint && inst.partTint[part.name]) || tint;     // e.g. Bryan's infected arm
       const M = mul4(cam.m, mul4(world, mats[pi]));
       // GTE: 4.12 rotation, integer mm translation, PS1 axes (y down, z forward)
       const R = [M[0], M[1], M[2], -M[4], -M[5], -M[6], -M[8], -M[9], -M[10]].map(v => Math.round(v * 1000 * 4096));
@@ -237,7 +239,7 @@ export function render(fb, cam, instances, lights, otBits = 12) {
         let sum = 0;
         for (const q of vi) sum += Z[q];
         const slot = Math.min(Math.max((sum / vi.length) >> 4, 0), OT - 1);   // AVSZ3/4 -> OT
-        (ot[slot] || (ot[slot] = [])).push([m, sx, sy, zm, col, f, tint]);
+        (ot[slot] || (ot[slot] = [])).push([m, sx, sy, zm, col, f, ptint]);
       }
     }
   }

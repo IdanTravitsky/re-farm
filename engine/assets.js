@@ -3,20 +3,16 @@
 // cached; the door transition hides the loading, exactly like the originals.
 import { Model, Font } from './psx.js';
 import { Room } from './room.js';
+import { decodePNG, toRGBA } from './png.js';
 
 export const BrowserPlatform = {
   base: 'data/',
   async json(p) { const r = await fetch(this.base + p); if (!r.ok) throw new Error(p + ' ' + r.status); return r.json(); },
   async bytes(p) { const r = await fetch(this.base + p); if (!r.ok) throw new Error(p + ' ' + r.status); return new Uint8Array(await r.arrayBuffer()); },
-  async image(p) {
-    const r = await fetch(this.base + p);
-    if (!r.ok) throw new Error(p + ' ' + r.status);
-    const img = await createImageBitmap(await r.blob());           // decodes even in hidden tabs
-    const c = document.createElement('canvas');
-    c.width = img.width; c.height = img.height;
-    const g = c.getContext('2d');
-    g.drawImage(img, 0, 0);
-    return { w: img.width, h: img.height, px: g.getImageData(0, 0, img.width, img.height).data };
+  async inflate(z) {                                     // zlib stream -> bytes (PNG IDAT)
+    const ds = new DecompressionStream('deflate');
+    const out = new Response(new Blob([z]).stream().pipeThrough(ds));
+    return new Uint8Array(await out.arrayBuffer());
   },
   headless: false,
 };
@@ -24,11 +20,14 @@ export const BrowserPlatform = {
 export class Assets {
   constructor(platform = BrowserPlatform) { this.P = platform; this.models = {}; this.rooms = {}; this.locations = {}; this.pending = {}; }
 
+  async png(p) { return decodePNG(await this.P.bytes(p), (z) => this.P.inflate(z)); }
+  async image(p) { return toRGBA(await this.png(p)); }
+
   async boot() {
     const P = this.P;
     this.content = await P.json('content.json');
     this.poses = await P.json('poses.json');
-    if (!P.headless) this.font = new Font(await P.image('font.png'), await P.json('font.json'));
+    if (!P.headless) this.font = new Font(await this.image('font.png'), await P.json('font.json'));
     await Promise.all(this.content.models.map(m => this.model(m)));
     return this;
   }
@@ -45,7 +44,8 @@ export class Assets {
     if (this.rooms[id]) return Promise.resolve(this.rooms[id]);
     if (!this.pending[id]) {
       this.pending[id] = (async () => {
-        const room = new Room(await this.P.json('rooms/' + id + '.json'));
+        const json = await this.P.json('rooms/' + id + '.json');
+        const room = new Room(json, await this.png(json.grid.png));
         if (!this.P.headless) await this.loadPlates(room);
         this.rooms[id] = room;
         delete this.pending[id];
@@ -56,12 +56,11 @@ export class Assets {
   }
   async loadPlates(room) {
     await Promise.all(room.cameras.map(async c => {
-      c.plate = await this.P.image('bg/' + c.id + '.png');
-      const d16 = await this.P.bytes('bg/' + c.id + '_depth.u16');
-      const u = new Uint16Array(d16.buffer, d16.byteOffset, d16.byteLength / 2);
-      c.depth = new Float32Array(u.length);
-      for (let i = 0; i < u.length; i++) c.depth[i] = u[i] / 100;
-      await Promise.all(c.sprites.map(async s => { s.img = await this.P.image('bg/' + s.file); }));
+      c.plate = await this.image('bg/' + c.id + '.png');
+      const d = await this.png('bg/' + c.id + '_depth.png');
+      c.depth = new Float32Array(d.w * d.h);
+      for (let i = 0; i < c.depth.length; i++) c.depth[i] = ((d.data[i * 3] << 8) | d.data[i * 3 + 1]) / 100;
+      await Promise.all(c.sprites.map(async s => { s.img = await this.image('bg/' + s.file); }));
     }));
   }
   roomLoaded(id) { return !!this.rooms[id]; }

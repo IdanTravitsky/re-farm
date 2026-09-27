@@ -42,9 +42,17 @@ export function sample(clip, t) {
   return K[K.length - 1][1];
 }
 
+const FALLBACK = { run: 'walk', walk: 'idle', bite: 'attack', spit: 'attack', drop: 'idle', talk: 'idle', turn: 'idle',
+  aim: 'idle', grabbed: 'hurt', push: 'attack', rise: 'idle', idle_danger: 'idle', walk_danger: 'walk', back: 'walk', pickup: 'idle' };
+
 export class Animator {
   constructor(clips) { this.clips = clips; this.cur = null; this.t = 0; this.prev = null; this.fade = 0; this.fadeLen = 0.15; this.speed = 1; }
   play(name, { restart = false, fade = 0.15, speed = 1 } = {}) {
+    // a clip set may lack a clip a script asks for: fall back to its nearest relative
+    const asked = name;
+    for (let k = 0; k < 4 && !this.clips[name]; k++) name = FALLBACK[name] || 'idle';
+    if (!this.clips[name]) name = Object.keys(this.clips)[0];
+    if (asked === 'run' && name === 'walk') speed *= 1.6;          // a shambler "running" is a fast lurch
     this.speed = speed;
     if (this.cur === name && !restart) return;
     if (this.cur) { this.prev = this.pose(); this.fade = fade; this.fadeLen = fade; }
@@ -131,6 +139,9 @@ export function bryanClips(P) {
     fire_pistol: recoil(aimP, 0.8),
     hurt: { len: 0.5, loop: false, keys: K([[0, idle], [0.1, add(idle, { torso: [-18, 0, 10], head: [-24, 0, 0], upperarm_r: [-30, 20, 0], upperarm_l: [-30, -20, 0] })], [0.5, idle]]) },
     pickup: { len: 0.9, loop: false, keys: K([[0, idle], [0.35, add(idle, { _root: [0, 0, -330], thigh_r: [-85, 0, 0], thigh_l: [-70, 0, 0], shin_r: [120, 0, 0], shin_l: [110, 0, 0], foot_r: [-30, 0, 0], foot_l: [-35, 0, 0], torso: [38, 0, 0], upperarm_r: [-55, 0, 0], forearm_r: [-20, 0, 0] })], [0.55, add(idle, { _root: [0, 0, -330], thigh_r: [-85, 0, 0], thigh_l: [-70, 0, 0], shin_r: [120, 0, 0], shin_l: [110, 0, 0], foot_r: [-30, 0, 0], foot_l: [-35, 0, 0], torso: [38, 0, 0], upperarm_r: [-55, 0, 0], forearm_r: [-20, 0, 0] })], [0.9, idle]]) },
+    grabbed: { len: 0.5, loop: true, keys: K([[0, add(idle, { upperarm_r: [-70, 30, 0], upperarm_l: [-70, -30, 0], forearm_r: [-70, 0, 0], forearm_l: [-70, 0, 0], torso: [-14, 0, 8], head: [-18, 0, -12] })],
+      [0.25, add(idle, { upperarm_r: [-60, 30, 0], upperarm_l: [-80, -30, 0], forearm_r: [-60, 0, 0], forearm_l: [-80, 0, 0], torso: [-10, 0, -8], head: [-12, 0, 14] })]]) },
+    push: { len: 0.45, loop: false, keys: K([[0, idle], [0.15, add(idle, { upperarm_r: [-90, 10, 0], upperarm_l: [-90, -10, 0], forearm_r: [0, 0, 0], forearm_l: [0, 0, 0], torso: [10, 0, 0] })], [0.45, idle]]) },
     death: { len: 1.6, loop: false, keys: K([[0, idle],
       [0.45, add(idle, { _root: [0, 0, -380], thigh_r: [-70, 0, 0], thigh_l: [-60, 0, 0], shin_r: [115, 0, 0], shin_l: [105, 0, 0], torso: [30, 0, 10], head: [30, 0, 0], upperarm_r: [-20, 0, 0], upperarm_l: [-20, 0, 0] })],
       [1.1, add(idle, { _root: [0, 0, -820], hips: [82, 0, 8], thigh_r: [-5, 0, 0], thigh_l: [5, 0, 0], shin_r: [20, 0, 0], torso: [6, 0, 0], head: [-20, 0, 30], upperarm_r: [-150, 30, 0], upperarm_l: [-160, -20, 0] })],
@@ -182,10 +193,109 @@ export function wiggle(pose, model, t, amt = 1) {
   return out;
 }
 
+
+// ---------------------------------------------------------------- more creatures (rest pose = standing, arms down)
+const HUM_IDLE = { upperarm_r: [4, 9, 0], upperarm_l: [4, -9, 0], forearm_r: [-14, 0, 0], forearm_l: [-14, 0, 0], head: [4, 0, 0] };
+
+export function npcClips(P) {
+  const idle = P.idle || HUM_IDLE;
+  const talk = (t) => add(idle, { upperarm_r: [-30 - 10 * Math.sin(t * 5), 20, 0], forearm_r: [-50, 0, 0], head: [2 * Math.sin(t * 3), 6 * Math.sin(t * 2), 0] });
+  return {
+    idle: { len: 3, loop: true, keys: K([[0, idle], [1.5, add(idle, { torso: [2, 0, 0], head: [-2, 0, 4] })]]) },
+    walk: { len: 1.05, loop: true, fn: (t) => gait(idle, 0.95)(t / 1.05) },
+    run: { len: 0.66, loop: true, fn: (t) => gait(add(idle, { forearm_r: [-60, 0, 0], forearm_l: [-60, 0, 0] }), 1.5, { lean: 10, bob: 20 })(t / 0.66) },
+    talk: { len: 2.4, loop: true, fn: talk },
+    aim: { len: 2, loop: true, keys: K([[0, P.aim || add(idle, { upperarm_r: [-80, 0, 0], forearm_r: [-10, 0, 0], upperarm_l: [-75, -20, 20], forearm_l: [-20, 0, 0] })]]) },
+    hurt: { len: 0.5, loop: false, keys: K([[0, idle], [0.1, add(idle, { torso: [-18, 0, 10], head: [-24, 0, 0] })], [0.5, idle]]) },
+    death: zombieClips({ lurch: idle }).death,
+  };
+}
+
+export function leaperClips(P) {
+  const crouch = { torso: [34, 0, 0], head: [-30, 0, 0], thigh_r: [-60, 6, 0], thigh_l: [-60, -6, 0], shin_r: [90, 0, 0], shin_l: [90, 0, 0],
+    foot_r: [-25, 0, 0], foot_l: [-25, 0, 0], upperarm_r: [-40, 20, 0], upperarm_l: [-40, -20, 0], forearm_r: [-40, 0, 0], forearm_l: [-40, 0, 0], _root: [0, 0, -260] };
+  const run = (t) => gait(add(crouch, { _root: [0, 0, 100] }), 1.5, { lean: 20, bob: 28, armSwing: 1.4, kneeLift: 1.2 })(t);
+  const base = zombieClips({ lurch: crouch });
+  return {
+    ...base,
+    idle: { len: 1.4, loop: true, keys: K([[0, crouch], [0.7, add(crouch, { torso: [4, 0, 6], head: [6, 0, -10] })]]) },
+    walk: { len: 0.5, loop: true, fn: (t) => run(t / 0.5) },
+    run: { len: 0.5, loop: true, fn: (t) => run(t / 0.5) },
+    drop: { len: 0.7, loop: false, keys: K([[0, add(crouch, { _root: [0, 0, 3600], torso: [-10, 0, 0] })], [0.45, add(crouch, { _root: [0, 0, 0] })], [0.7, crouch]]) },
+    attack: { len: 0.7, loop: false, keys: K([[0, crouch], [0.2, add(crouch, { _root: [0, 0, -80], torso: [10, 0, 0] })],
+      [0.38, { upperarm_r: [-140, 10, 0], upperarm_l: [-140, -10, 0], torso: [20, 0, 0], _root: [0, -400, 200] }], [0.7, crouch]]) },
+  };
+}
+
+export function spitterClips(P) {
+  const base = zombieClips(P);
+  const L = P.lurch;
+  return {
+    ...base,
+    spit: { len: 1.0, loop: false, keys: K([[0, L], [0.35, add(L, { torso: [-24, 0, 0], head: [-35, 0, 0] })],
+      [0.5, add(L, { torso: [30, 0, 0], head: [25, 0, 0], _root: [0, -80, 0] })], [1.0, L]]) },
+  };
+}
+
+export function bruteClips(P) {
+  const base = zombieClips(P, true);
+  const L = P.lurch;
+  return {
+    ...base,
+    walk: { len: 1.9, loop: true, fn: (t) => gait(L, 0.7, { lean: 6, bob: 30, sway: 14, armSwing: 0.5, kneeLift: 0.4 })(t / 1.9) },
+    run: { len: 1.0, loop: true, fn: (t) => gait(L, 1.1, { lean: 14, bob: 40, sway: 10, armSwing: 0.8 })(t / 1.0) },
+    attack: { len: 1.4, loop: false, keys: K([[0, L], [0.5, add(L, { torso: [-20, 0, 0], upperarm_r: [-160, 20, 0], upperarm_l: [-160, -20, 0] })],
+      [0.7, add(L, { torso: [35, 0, 0], upperarm_r: [-40, 0, 0], upperarm_l: [-40, 0, 0], _root: [0, -120, -60] })], [1.4, L]]) },
+  };
+}
+
+// small quadruped rig: body, head, tail0..2, leg_fl/fr/bl/br
+export function ratClips() {
+  const legs = (a, amp) => ({ leg_fl: [30 * amp * Math.sin(a), 0, 0], leg_br: [30 * amp * Math.sin(a), 0, 0],
+    leg_fr: [-30 * amp * Math.sin(a), 0, 0], leg_bl: [-30 * amp * Math.sin(a), 0, 0],
+    tail0: [0, 0, 20 * Math.sin(a * 0.5)], tail1: [0, 0, 25 * Math.sin(a * 0.5 + 1)], tail2: [0, 0, 30 * Math.sin(a * 0.5 + 2)] });
+  return {
+    idle: { len: 0.8, loop: true, fn: (t) => ({ ...legs(t * 2, 0.1), head: [10 * Math.sin(t * 12), 0, 15 * Math.sin(t * 5)] }) },
+    run: { len: 0.2, loop: true, fn: (t) => ({ ...legs(t / 0.2 * Math.PI * 2, 1), body: [4 * Math.sin(t / 0.2 * Math.PI * 4), 0, 0] }) },
+    walk: { len: 0.3, loop: true, fn: (t) => legs(t / 0.3 * Math.PI * 2, 0.7) },
+    attack: { len: 0.4, loop: false, keys: K([[0, {}], [0.15, { head: [-30, 0, 0], _root: [0, -60, 30] }], [0.4, {}]]) },
+    hurt: { len: 0.2, loop: false, keys: K([[0, {}], [0.1, { body: [0, 0, 30] }], [0.2, {}]]) },
+    death: { len: 0.5, loop: false, keys: K([[0, {}], [0.5, { body: [0, 170, 0], _root: [0, 0, 60] }]]) },
+  };
+}
+
+// a chain of segments seg0..seg7 rooted in the floor: sways, lashes when you get close
+export function tendrilClips() {
+  const chain = (f) => { const p = {}; for (let i = 0; i < 8; i++) p['seg' + i] = f(i); return p; };
+  const sway = (t) => chain(i => [8 * Math.sin(t * 1.6 + i * 0.7), 10 * Math.cos(t * 1.1 + i), 0]);
+  return {
+    idle: { len: 4, loop: true, fn: sway }, walk: { len: 4, loop: true, fn: sway }, run: { len: 4, loop: true, fn: sway },
+    attack: { len: 0.8, loop: false, keys: K([[0, chain(() => [0, 0, 0])], [0.25, chain(() => [-14, 0, 0])], [0.4, chain(() => [22, 0, 0])], [0.8, chain(() => [0, 0, 0])]]) },
+    hurt: { len: 0.3, loop: false, keys: K([[0, chain(() => [0, 0, 0])], [0.12, chain(() => [0, 18, 0])], [0.3, chain(() => [0, 0, 0])]]) },
+    death: { len: 1.2, loop: false, keys: K([[0, chain(() => [0, 0, 0])], [1.2, chain(i => [i === 0 ? 80 : 12, 0, 0])]]) },
+  };
+}
+
+// a zombie holding the player and biting
+export function grabClips(P) {
+  const L = P.lurch || HUM_IDLE;
+  return {
+    bite: { len: 1.2, loop: true, keys: K([[0, add(L, { upperarm_r: [-90, 10, 0], upperarm_l: [-90, -10, 0], forearm_r: [-40, 0, 0], forearm_l: [-40, 0, 0], torso: [18, 0, 0], head: [20, 0, 0] })],
+      [0.6, add(L, { upperarm_r: [-95, 10, 0], upperarm_l: [-85, -10, 0], forearm_r: [-45, 0, 0], forearm_l: [-35, 0, 0], torso: [24, 0, 6], head: [30, 0, 10] })]]) },
+  };
+}
+
 // clip sets by name (content/actors.json "clips"), built from that model's key poses
 export const CLIPSETS = {
   bryan: (P) => bryanClips(P),
-  zombie: (P) => zombieClips(P),
+  zombie: (P) => ({ ...zombieClips(P), ...grabClips(P) }),
   zombie_heavy: (P) => zombieClips(P, true),
   dog: (P) => dogClips(P),
+  npc: (P) => npcClips(P),
+  leaper: (P) => leaperClips(P),
+  spitter: (P) => ({ ...spitterClips(P), ...grabClips(P) }),
+  brute: (P) => ({ ...bruteClips(P), ...grabClips(P) }),
+  shambler: (P) => ({ ...zombieClips(P), ...grabClips(P) }),
+  rat: () => ratClips(),
+  tendril: () => tendrilClips(),
 };

@@ -12,16 +12,21 @@ function b64(s, Type) {
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
 export class Room {
-  constructor(json) {
+  // json: rooms/<id>.json; gridImg: its decoded packed-grid PNG ({w, h, ch: 3, data})
+  constructor(json, gridImg) {
     Object.assign(this, { id: json.id, location: json.location, name: json.name, music: json.music, wind: json.wind || 0 });
     const g = json.grid;
     Object.assign(this, { x0: g.x0, y0: g.y0, res: g.res, nx: g.nx, ny: g.ny });
-    this.walkA = b64(g.walk, Uint8Array);
-    this.h = b64(g.height_cm, Int16Array);
-    this.surf = b64(g.surf, Uint8Array);
-    this.top = b64(g.top_cm, Int16Array);
-    this.best = b64(g.cam_best, Uint8Array);
-    this.mask = b64(g.cam_mask, Uint16Array);
+    const n = g.nx * g.ny, D = gridImg.data, b1 = n * 3, b2 = n * 6;
+    this.walkA = new Uint8Array(n); this.surf = new Uint8Array(n); this.best = new Uint8Array(n);
+    this.mask = new Uint16Array(n); this.h = new Int16Array(n); this.top = new Int16Array(n);
+    for (let i = 0; i < n; i++) {
+      const a = i * 3;
+      this.walkA[i] = D[a] & 1; this.surf[i] = D[a] >> 1; this.best[i] = D[a + 1];
+      this.mask[i] = D[a + 2] | (D[b1 + a] << 8);
+      this.h[i] = ((D[b1 + a + 1] << 8) | D[b1 + a + 2]) - 32768;
+      this.top[i] = ((D[b2 + a] << 8) | D[b2 + a + 1]) - 32768;
+    }
     this.map = json.map;
     this.mapCells = json.map ? b64(json.map.cells, Uint8Array) : null;
     this.cameras = json.cameras.map(c => ({
@@ -43,7 +48,7 @@ export class Room {
     return i < 0 || j < 0 || i >= this.nx || j >= this.ny ? -1 : j * this.nx + i;
   }
   walkable(x, y) { const k = this.idx(x, y); return k >= 0 && this.walkA[k] === 1; }
-  floor(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : Math.max(0, this.h[k] / 100); }
+  floor(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.h[k] / 100; }          // sets may sit below ground (interiors)
   surface(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.surf[k]; }
 
   // movement line of sight (strict); skipEnds>0 for "can I see it" where bodies overlap obstacles

@@ -21,14 +21,20 @@ export class GameState {
     this.time = 0;                  // play time, seconds
     this.saves = 0;
     this.stats = { shots: 0, kills: 0, damage: 0 };
+    this.corpses = {};              // enemy id -> {type, room, at, yaw}: bodies stay where they fell
+    this.held = {};                 // story items outside the slots
+    this.box = [];                  // item box contents (shared by every box, like RE2)
+    this.infection = 0;             // 0..100: the bite spreading (drawn on Bryan's arm)
+    this.infect_rate = 0;           // per second, set by the story
   }
   toJSON() { return { ...this }; }
   static from(obj) { const s = Object.create(GameState.prototype); Object.assign(s, JSON.parse(JSON.stringify(obj))); return s; }
 
-  has(id, n = 1) { const it = this.inventory.find(i => i.id === id); return !!it && (n <= 1 || it.n >= n); }   // an empty gun is still carried
-  count(id) { const it = this.inventory.find(i => i.id === id); return it ? it.n : 0; }
+  has(id, n = 1) { if (this.held?.[id]) return true; const it = this.inventory.find(i => i.id === id); return !!it && (n <= 1 || it.n >= n); }   // an empty gun is still carried
+  count(id) { if (this.held?.[id]) return 1; const it = this.inventory.find(i => i.id === id); return it ? it.n : 0; }
   add(id, n, items, slots) {
     const def = items[id] || {};
+    if (def.held) { (this.held ||= {})[id] = true; return true; }       // story items carried outside the 8 slots (the B7 cooler)
     const it = this.inventory.find(i => i.id === id);
     if (it && def.kind !== 'weapon') { it.n += n; return true; }
     if (it) return true;
@@ -38,6 +44,7 @@ export class GameState {
     return true;
   }
   consume(id, n = 1) {
+    if (this.held?.[id]) { delete this.held[id]; return true; }
     const it = this.inventory.find(i => i.id === id);
     if (!it) return false;
     it.n -= n;
