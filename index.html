@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Resident Evil: The Farm</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #wrap { position: relative; width: min(100vw, 133.333vh); height: min(75vw, 100vh); }
+  #screen { width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
+  /* faint CRT scanlines; toggle with the S key */
+  #scan { position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.18) 3px, rgba(0,0,0,0) 4px); }
+  #scan.off { display: none; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="screen" width="320" height="240" tabindex="0"></canvas>
+  <div id="scan"></div>
+</div>
+<script>
+  addEventListener('keydown', e => { if (e.code === 'KeyS' && e.altKey) document.getElementById('scan').classList.toggle('off'); });
+  document.getElementById('screen').focus();
+</script>
+<script>window.RE_DATA = "data/";</script>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>
