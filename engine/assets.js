@@ -50,7 +50,7 @@ export class Assets {
         this.rooms[id] = room;
         delete this.pending[id];
         return room;
-      })();
+      })().catch(error => { delete this.pending[id]; throw error; });
     }
     return this.pending[id];
   }

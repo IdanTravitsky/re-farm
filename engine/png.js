@@ -4,11 +4,14 @@
 // `inflate(bytes) -> Promise<Uint8Array>` is supplied by the platform.
 
 export async function decodePNG(bytes, inflate) {
+  if (bytes.length < 33 || ![137,80,78,71,13,10,26,10].every((n,i)=>bytes[i]===n)) throw new Error('Invalid PNG signature');
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let p = 8, w = 0, h = 0, depth = 0, ctype = 0;
   const idat = [];
   while (p < bytes.length) {
+    if (p + 12 > bytes.length) throw new Error('Truncated PNG chunk');
     const len = dv.getUint32(p), type = String.fromCharCode(bytes[p + 4], bytes[p + 5], bytes[p + 6], bytes[p + 7]);
+    if (p + len + 12 > bytes.length) throw new Error('Truncated PNG data');
     const data = bytes.subarray(p + 8, p + 8 + len);
     if (type === 'IHDR') { w = dv.getUint32(p + 8); h = dv.getUint32(p + 12); depth = bytes[p + 16]; ctype = bytes[p + 17]; if (bytes[p + 20]) throw new Error('interlaced PNG'); }
     else if (type === 'IDAT') idat.push(data);
@@ -24,10 +27,12 @@ export async function decodePNG(bytes, inflate) {
   let o = 0;
   for (const d of idat) { z.set(d, o); o += d.length; }
   const raw = await inflate(z);
+  if (!w || !h || raw.length !== h * (w * ch + 1)) throw new Error('Invalid PNG scanline length');
   const stride = w * ch, out = new Uint8Array(w * h * ch);
   let prev = new Uint8Array(stride);
   for (let y = 0; y < h; y++) {
     const f = raw[y * (stride + 1)], src = raw.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    if (f > 4) throw new Error('Invalid PNG filter');
     const row = out.subarray(y * stride, (y + 1) * stride);
     for (let x = 0; x < stride; x++) {
       const a = x >= ch ? row[x - ch] : 0, b = prev[x], c = x >= ch ? prev[x - ch] : 0;

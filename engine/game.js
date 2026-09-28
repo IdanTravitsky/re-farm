@@ -50,9 +50,10 @@ export const TRANSITIONS = {
 };
 
 export class Game {
-  constructor(A, { headless = false } = {}) {
+  constructor(A, { headless = false, scale = headless ? 1 : 2 } = {}) {
     this.A = A; this.headless = headless;
-    this.fb = new PSX.Frame(320, 240);
+    this.fb = new PSX.Frame(320, 240, scale);
+    this.hints = true; this.reducedMotion = false; this.interactionKey = null;
     this.ui = new UI(this); this.script = new Script(this);
     this.music = new Music(); this.music.register(A.content.music);
     this.mode = 'title'; this.t = 0; this.time = 0; this.sel = 0;
@@ -70,12 +71,30 @@ export class Game {
   }
 
   // ---------------------------------------------------------------- flow
+  resetScene() {
+    this.ui = new UI(this); this.script = new Script(this);
+    this.player = null; this.room = null; this.location = null; this.enemies = [];
+    this.cinematic = false; this.forcedCamera = null; this.musicOverride = undefined;
+    this.particles = []; this.projectiles = []; this.puddles = []; this.muzzle = null;
+    this.interactionKey = null; this.cam = -1;
+    this.fx = { shake: 0, whiteout: 0, fade: 0, fadeTo: 0, fadeRate: 0, card: null };
+  }
+  checkpoint(room, at, yaw) {
+    const snapshot = GameState.from(this.state.toJSON());
+    snapshot.room = room; snapshot.location = this.A.content.world.rooms[room].location;
+    snapshot.pos = { x: at[0], y: at[1], yaw };
+    const saved = Saves.writeCheckpoint(snapshot, this.A.content.world.locations[snapshot.location].title);
+    if (!saved) this.notice = { text: 'Checkpoint could not save: browser storage is unavailable.', until: this.time + 12 };
+    return saved;
+  }
   async newGame() {
+    this.resetScene();
     const start = this.A.content.game.start, items = this.A.content.items;
     this.state = new GameState(start);
     for (const [id, n] of start.inventory) this.state.add(id, n, items, this.slots);
     this.player = null;
     const yaw = start.face ? yawTo(start.at[0], start.at[1], start.face[0], start.face[1]) : 0;
+    this.checkpoint(start.room, start.at, yaw);
     await this.enterRoom(start.room, start.at[0], start.at[1], yaw);
     this.mode = 'play'; this.t = 0;
     this.script.fire('new_game');
@@ -99,7 +118,7 @@ export class Game {
     if (!this.player) this.player = new Player(this, x, y, yaw);
     const p = this.player;
     [p.x, p.y] = room.nearestWalkable(x, y);
-    p.z = room.floor(p.x, p.y); p.yaw = yaw; p.mode = 'move'; p.quickTurn = 0; p.scripted = null; p.grab = null;
+    p.z = room.floor(p.x, p.y); p.yaw = yaw; p.mode = 'move'; p.target = null; p.pickDone = null; p.invulnT = 0.8; p.quickTurn = 0; p.scripted = null; p.grab = null;
     p.anim.play('idle', { restart: true, fade: 0 }); p.updateHide();
     this.cam = -1; this.forcedCamera = null; this.flowField = null; this.particles = []; this.muzzle = null;
     this.projectiles = []; this.puddles = []; this.musicOverride = undefined;
@@ -133,7 +152,8 @@ export class Game {
     if (c) { s.at = c.at; s.room = c.room; s.yaw ??= c.yaw; s.through = true; }
     const src = spec.at_actor && this.enemies.find(e => e.id === spec.at_actor);
     if (src) { const j = spec.jitter ?? 0.8; s.at = [src.x + (Math.random() - 0.5) * 2 * j, src.y + (Math.random() - 0.5) * 2 * j]; }
-    if (s.room !== this.state.room) { this.state.enemies[s.id] = { type: s.type, room: s.room, at: s.at, yaw: s.yaw || 0, state: s.state || 'chase' }; return; }
+    delete this.state.dead[s.id]; delete this.state.corpses[s.id];
+    if (s.room !== this.state.room) { this.state.enemies[s.id] = { ...s, yaw: s.yaw || 0, state: s.state || 'chase' }; return; }
     const old = this.enemies.find(e => e.id === s.id);
     if (old) old.state = 'gone';
     const e = new Enemy(this, s);
@@ -161,7 +181,9 @@ export class Game {
     this.music.play(null);
   }
   async continueToNext() {
-    const loc = await this.A.location(this.chapter.next);
+    const next = this.chapter.next;
+    this.mode = 'loading';
+    const loc = await this.A.location(next);
     const e = loc.entry || {};
     const room = e.room || loc.rooms[0];
     this.mode = 'loading';
@@ -171,6 +193,7 @@ export class Game {
     Object.assign(this.fx, { fade: 0, fadeTo: 0, whiteout: 0, shake: 0, card: null });
     if (this.player) { this.player.hidden = false; this.player.scripted = null; }
     this.state.enemies = {}; this.state.corpses = {}; this.state.dead = {};   // actors belong to their chapter
+    this.checkpoint(room, e.at || [0, 0], e.yaw || 0);
     await this.enterRoom(room, ...(e.at || [0, 0]), e.yaw || 0);
     this.mode = 'play'; this.t = 0;
     if (loc.card) this.titleCard(loc.card);
@@ -182,14 +205,17 @@ export class Game {
     const S = this.state, p = this.player;
     this.stashEnemies();
     S.pos = { x: p.x, y: p.y, yaw: p.yaw };
-    S.consume('ink_ribbon', 1);
-    S.saves++;
-    Saves.write(slot, S, this.room.name);
+    const saved = GameState.from(S.toJSON());
+    saved.consume('ink_ribbon', 1); saved.saves++;
+    if (!Saves.write(slot, saved, this.room.name)) return false;
+    S.consume('ink_ribbon', 1); S.saves++;
+    return true;
   }
   async loadFrom(slot) {
-    const st = Saves.read(slot);
+    const st = slot === 'checkpoint' ? Saves.readCheckpoint() : Saves.read(slot);
     if (!st) return false;
     this.mode = 'loading';
+    this.resetScene();
     this.state = st; this.player = null; this.room = null; this.location = null;
     this.cinematic = false; this.fx.fade = this.fx.fadeTo = 0; this.fx.card = null; this.script.running = [];
     await this.enterRoom(st.room, st.pos.x, st.pos.y, st.pos.yaw, { load: true });
@@ -207,21 +233,40 @@ export class Game {
     for (const b of L.item_boxes || []) if (b.room === rid) out.push({ kind: 'box', at: b.at, r: b.r });
     return out;
   }
-  nearest(filter = () => true) {
+  interactionId(c) { return [c.kind, c.pk?.id || c.ex?.id || c.door?.id || '', ...c.at].join(':'); }
+  nearby(filter = () => true) {
     const p = this.player;
-    let best = null, bd = 1e9;
-    for (const c of this.candidates()) {
-      if (!filter(c)) continue;
+    return this.candidates().filter(c => {
+      if (!filter(c)) return false;
       const d = Math.hypot(c.at[0] - p.x, c.at[1] - p.y);
-      if (d > c.r) continue;
-      if (d > 0.6 && Math.abs(angDiff(yawTo(p.x, p.y, c.at[0], c.at[1]), p.yaw)) > 75) continue;
-      // pickups / doors / typewriters win over plain examine text at the same spot
-      // an item beats the typewriter beside it; flavour text loses to anything you can actually do
-      const acts = c.kind !== 'examine' || c.ex.ask || c.ex.do || (c.ex.use && this.state.has(c.ex.use.item));
-      const score = d - (c.kind === 'pickup' ? 0.7 : c.kind === 'examine' ? (acts ? 0.6 : 0) : 0.5);
-      if (score < bd) { bd = score; best = c; }
-    }
-    return best;
+      if (d > c.r) return false;
+      // Small pickups should not disappear because Bryan is a few degrees off.
+      return c.kind === 'pickup' || d <= 0.85 || Math.abs(angDiff(yawTo(p.x,p.y,...c.at),p.yaw)) <= 100;
+    }).sort((a,b) => {
+      const score = c => Math.hypot(c.at[0]-p.x,c.at[1]-p.y) -
+        (c.kind === 'pickup' ? 2.1 : c.kind === 'examine' ? (c.ex.ask || c.ex.do || (c.ex.use && this.state.has(c.ex.use.item)) ? .8 : 0) : .4);
+      return score(a)-score(b);
+    });
+  }
+  nearest(filter) {
+    const list = this.nearby(filter);
+    return list.find(c => this.interactionId(c) === this.interactionKey) || list[0] || null;
+  }
+  cycleInteraction() {
+    const list = this.nearby();
+    if (list.length < 2) return;
+    const key = this.interactionId(this.nearest());
+    const index = list.findIndex(c => this.interactionId(c) === key);
+    this.interactionKey = this.interactionId(list[(index+1)%list.length]);
+    this.sfx('cursor');
+  }
+  interactionLabel(c) {
+    if (c.kind === 'pickup') return 'Take ' + this.A.content.items[c.pk.item].name;
+    if (c.kind === 'box') return 'Open ITEM BOX';
+    if (c.kind === 'typewriter') return 'Save at TYPEWRITER';
+    if (c.kind === 'door') return 'Open ' + (c.door.transition === 'gate' ? 'GATE' : 'DOOR');
+    if (c.ex.use && this.state.has(c.ex.use.item)) return 'Use ' + this.A.content.items[c.ex.use.item].name;
+    return c.ex.label || (c.ex.ask ? c.ex.ask.replace(/\?$/, '') : 'Inspect');
   }
   interact() {
     const best = this.nearest();
@@ -244,7 +289,7 @@ export class Game {
       });
     }
     const stacks = S.inventory.find(i => i.id === pk.item) && def.kind !== 'weapon';
-    if (!stacks && S.inventory.length >= this.slots) return this.ui.say(['There is no more room to carry anything.', 'Leave something in an ITEM BOX.']);
+    if (!def.held && !stacks && S.inventory.length >= this.slots) return this.ui.say(['There is no more room to carry anything.', 'Leave something in an ITEM BOX.']);
     this.ui.ask(pk.ask || `Will you take the ${def.name}?`, () => {
       p.mode = 'pickup'; p.anim.play('pickup', { restart: true });
       p.pickDone = () => {
@@ -285,7 +330,14 @@ export class Game {
     if (c.kind === 'door') return this.tryDoor(c.door, c.side);
     return this.useAt(c.ex);
   }
-  give(id, n) { this.state.add(id, n, this.A.content.items, this.slots); }
+  give(id, n) {
+    if (this.state.add(id, n, this.A.content.items, this.slots)) return true;
+    // Scripted rewards must never vanish when all inventory slots are occupied.
+    const stack = this.state.box.find(i => i.id === id && !this.A.content.items[id].weapon);
+    if (stack) stack.n += n; else this.state.box.push({ id, n });
+    this.notice = { text: 'Inventory full: reward sent to ITEM BOX.', until: this.time + 8 };
+    return false;
+  }
 
   // ---------------------------------------------------------------- doors & room changes
   // door fields: lock {key?, text?, if?}, oneway 'a'|'b' (+ oneway_text), requires {if, text}, when,
@@ -326,14 +378,16 @@ export class Game {
     const T = TRANSITIONS[kind];
     this.mode = 'door'; this.t = 0; this.sfx(T ? T.sfx : 'door');
     this.door = { door, to, kind, ready: false, finishing: false };
-    this.A.room(to.room).then(() => { this.door.ready = true; });
+    const pendingDoor = this.door;
+    this.A.room(to.room).then(() => { pendingDoor.ready = true; }).catch(error => this.fail(error));
   }
   gotoRoom(room, at, yaw, transition = 'fade') {
     this.mode = 'door'; this.t = 0;
     const T = TRANSITIONS[transition];
     if (T) this.sfx(T.sfx);
     this.door = { door: { id: null }, kind: transition, to: { room, spawn: at, yaw }, ready: false, finishing: false };
-    this.A.room(room).then(() => { this.door.ready = true; });
+    const pendingDoor = this.door;
+    this.A.room(room).then(() => { pendingDoor.ready = true; }).catch(error => this.fail(error));
   }
   updateCamera() {
     const p = this.player;
@@ -358,7 +412,7 @@ export class Game {
     for (const e of this.enemies) {
       if (!e.hostile()) continue;
       const d = Math.hypot(e.x - p.x, e.y - p.y), a = Math.abs(angDiff(yawTo(p.x, p.y, e.x, e.y), p.yaw));
-      if (d > 16 || a > 80 || !R.shotLos(p.x, p.y, p.z + 1.35, e.x, e.y, e.z + e.chest())) continue;
+      if (d > (p.weapon()?.range || 16) || a > 80 || !R.shotLos(p.x, p.y, p.z + 1.35, e.x, e.y, e.z + e.chest())) continue;
       if (d + a / 20 < bs) { bs = d + a / 20; best = e; }
     }
     return best;
@@ -449,35 +503,39 @@ export class Game {
     switch (this.mode) {
       case 'title': return this.updateTitle(I);
       case 'intro':
-        if (I.confirmPressed && this.t > 0.8) { this.mode = 'loading'; this.newGame(); }
+        if (I.confirmPressed && this.t > 0.8) { this.mode = 'loading'; this.newGame().catch(error => this.fail(error)); }
         return;
-      case 'loading': return;
+      case 'loading': case 'error': return;
       case 'load': case 'save': return this.updateSlots(I);
       case 'door':
         if (this.t >= 2.6 && this.door.ready && !this.door.finishing) {
           this.door.finishing = true;
           const to = this.door.to;
-          this.enterRoom(to.room, to.spawn[0], to.spawn[1], to.yaw ?? 0, { door: this.door.door.id }).then(() => { this.mode = 'play'; this.t = 0; });
+          this.enterRoom(to.room, to.spawn[0], to.spawn[1], to.yaw ?? 0, { door: this.door.door.id }).then(() => { this.mode = 'play'; this.t = 0; }).catch(error => this.fail(error));
         }
         return;
       case 'dead':
         this.player.anim.update(DT);
-        if (this.t > 2 && I.confirmPressed) { if (Saves.any()) { this.mode = 'load'; this.sel = 0; this.slotBack = 'dead'; } else { this.mode = 'loading'; this.newGame(); } }
+        if (this.t > 2 && I.confirmPressed) { if (Saves.readCheckpoint()) { this.loadFrom('checkpoint').catch(error => this.fail(error)); } else if (Saves.any()) { this.mode = 'load'; this.sel = 0; this.slotBack = 'dead'; } else { this.mode = 'loading'; this.newGame().catch(error => this.fail(error)); } }
         if (this.t > 2 && I.cancelPressed) { this.mode = 'title'; this.t = 0; this.music.play(null); }
         return;
       case 'chapter':
-        if (this.t > 4 && I.confirmPressed) { if (this.chapter.hasNext) this.continueToNext(); else { this.mode = 'title'; this.t = 0; } }
+        if (this.t > 4 && I.confirmPressed) { if (this.chapter.hasNext) this.continueToNext().catch(error => this.fail(error)); else { this.mode = 'title'; this.t = 0; } }
         return;
       case 'play': return this.updatePlay(I);
     }
   }
+  titleOptions() { return [...(Saves.readCheckpoint() ? ['CONTINUE'] : []), 'NEW GAME', ...(Saves.any() ? ['LOAD GAME'] : [])]; }
   updateTitle(I) {
     const has = Saves.any();
-    if (I.upPressed || I.downPressed) { this.sel = has ? 1 - this.sel : 0; this.sfx('cursor'); }
+    const opts = this.titleOptions();
+    this.sel = Math.min(this.sel, opts.length - 1);
+    if (I.upPressed || I.downPressed) { this.sel = (this.sel + opts.length + (I.upPressed ? -1 : 1)) % opts.length; this.sfx('cursor'); }
     if (I.confirmPressed) {
       Audio.init();
       this.sfx('confirm');
-      if (this.sel === 1 && has) { this.mode = 'load'; this.sel = 0; this.slotBack = 'title'; }
+      if (opts[this.sel] === 'CONTINUE') { this.loadFrom('checkpoint').catch(error => this.fail(error)); }
+      else if (opts[this.sel] === 'LOAD GAME' && has) { this.mode = 'load'; this.sel = 0; this.slotBack = 'title'; }
       else { this.mode = 'intro'; this.t = 0; }
     }
   }
@@ -485,8 +543,8 @@ export class Game {
     if (I.upPressed || I.downPressed) { this.sel = (this.sel + (I.upPressed ? 2 : 1)) % 3; this.sfx('cursor'); }
     if (I.cancelPressed) { this.mode = this.mode === 'save' ? 'play' : this.slotBack || 'title'; return; }
     if (!I.confirmPressed) return;
-    if (this.mode === 'save') { this.saveTo(this.sel); this.sfx('confirm'); this.mode = 'play'; this.ui.say(['Your progress has been recorded.']); }
-    else if (Saves.list()[this.sel]) { this.sfx('confirm'); this.loadFrom(this.sel); }
+    if (this.mode === 'save') { const saved = this.saveTo(this.sel); this.sfx(saved ? 'confirm' : 'locked'); this.mode = 'play'; this.ui.say([saved ? 'Your progress has been recorded.' : 'Could not save. Storage may be full or disabled. Your ink ribbon was kept.']); }
+    else if (Saves.list()[this.sel]) { this.sfx('confirm'); this.loadFrom(this.sel).catch(error => this.fail(error)); }
   }
   updatePlay(I) {
     const S = this.state, p = this.player;
@@ -497,11 +555,13 @@ export class Game {
       if (I.mapPressed) return this.ui.openMenu('map');
     }
     if (S.infect_rate && p.mode !== 'dead') S.infection = Math.min(100, (S.infection || 0) + S.infect_rate * DT);
+    if (!this.cinematic && p.mode === 'move' && I.cyclePressed) this.cycleInteraction();
     p.update(I);
+    if (this.mode !== 'play' || this.ui.modal()) return;
     for (const e of this.enemies) e.update();
-    this.separate();
+    if (!this.cinematic) this.separate();
     this.updateCamera();
-    this.updateProjectiles();
+    if (!this.cinematic) this.updateProjectiles();
     this.script.tick();
     this.script.update(DT);
     if (S.pursuit && S.pursuit.room === S.room && (S.pursuit.timer -= DT) <= 0) this.pursuerArrives();
@@ -521,6 +581,8 @@ export class Game {
     this.spawnEnemy({ ...P.snap, id: P.id, room: this.state.room, at: side.spawn, face: 'player', state: 'chase' });
   }
 
+  fail(error) { console.error(error); this.mode = 'error'; this.error = error.message || String(error); this.onError?.(error); }
+
   // ---------------------------------------------------------------- drawing
   draw() {
     if (this.headless) return;
@@ -528,6 +590,7 @@ export class Game {
     switch (this.mode) {
       case 'title': U.drawTitle(this.sel, Saves.any()); break;
       case 'intro': U.drawIntro(this.t); break;
+      case 'error': fb.fill(0, 0, 0); U.center('Unable to load this scene.', 90); U.center('Reload the page to retry.', 112); break;
       case 'loading': fb.fill(0, 0, 0); if (this.time % 1 < 0.5) U.center('NOW LOADING', 112, [140, 140, 140]); break;
       case 'door': this.drawDoor(); break;
       case 'load': this.state ? this.drawWorld() : fb.fill(0, 0, 0); U.drawSlots('LOAD', this.sel); break;
@@ -541,12 +604,12 @@ export class Game {
   drawWorld() {
     const fb = this.fb, R = this.room, C = R.cameras[this.cam], S = this.state;
     if (C.plate) fb.blit(C.plate.px); else fb.fill(0, 0, 0);
-    fb.depth = C.depth;
+    fb.sceneDepth(C.depth);
     for (const s of C.sprites) if (s.img && !S.taken[s.pickup]) PSX.blitSprite(fb, s.img, s.x, s.y);
     const boost = this.muzzle ? 0.5 : 0;
     const inst = this.player.hidden ? [] : [this.player.instance(this.cam, boost)];
     for (const e of this.enemies) if (e.state !== 'gone' && !e.hidden) inst.push(e.instance(this.cam, boost * 0.6));
-    const cam = this.fx.shake > 0 ? shaken(C.cam, this.fx.shake) : C.cam;
+    const cam = C.cam;
     PSX.render(fb, cam, inst, null);
     if (this.muzzle && inst.length) {
       const m = this.muzzle.muzzle, c = Math.cos(m.rot * D2R), s = Math.sin(m.rot * D2R), L = m.local;
@@ -567,7 +630,7 @@ export class Game {
     }
     for (const q of this.projectiles) dot(q.x, q.y, q.z, 3, [160, 210, 50]);
     for (const q of this.particles) dot(q.x, q.y, q.z, 2, q.c);
-    if (this.fx.whiteout > 0) PSX.tintScreen(fb, 255, 255, 255, Math.min(1, this.fx.whiteout * 1.6));
+    if (this.fx.whiteout > 0 && !this.reducedMotion) PSX.tintScreen(fb, 255, 255, 255, Math.min(1, this.fx.whiteout * 1.6));
     if (this.player.flashT > 0) PSX.tintScreen(fb, 160, 0, 0, 0.18);
     if (this.cinematic) { PSX.rect(fb, 0, 0, 320, 26, 0, 0, 0); PSX.rect(fb, 0, 214, 320, 26, 0, 0, 0); }
     if (this.fx.fade > 0) PSX.darken(fb, 1 - this.fx.fade);

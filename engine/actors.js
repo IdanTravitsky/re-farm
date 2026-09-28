@@ -13,7 +13,7 @@ import { Animator, CLIPSETS, wiggle } from './anim.js';
 
 export const DT = 1 / 30;
 const D2R = Math.PI / 180;
-export const angDiff = (a, b) => ((a - b + 540) % 360) - 180;
+export const angDiff = (a, b) => (((a - b + 180) % 360 + 360) % 360) - 180;
 export const fwd = (yaw) => [Math.sin(yaw * D2R), -Math.cos(yaw * D2R)];
 export const yawTo = (ax, ay, bx, by) => Math.atan2(bx - ax, -(by - ay)) / D2R;
 const turnTo = (a, want, rate) => { const d = angDiff(want, a.yaw); a.yaw += Math.sign(d) * Math.min(Math.abs(d), rate * DT); return d; };
@@ -31,9 +31,14 @@ class Actor {
   move(dx, dy) {
     const R = this.g.room;
     let moved = false;
-    if (R.walkable(this.x + dx, this.y + dy)) { this.x += dx; this.y += dy; moved = true; }
-    else if (R.walkable(this.x + dx, this.y)) { this.x += dx; moved = true; }
-    else if (R.walkable(this.x, this.y + dy)) { this.y += dy; moved = true; }
+    const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (R.res * 0.45)));
+    dx /= n; dy /= n;
+    for (let i = 0; i < n; i++) {
+      const openX = R.walkable(this.x + dx, this.y), openY = R.walkable(this.x, this.y + dy);
+      if (openX && openY && R.walkable(this.x + dx, this.y + dy)) { this.x += dx; this.y += dy; moved ||= !!(dx || dy); }
+      else if (openX && dx) { this.x += dx; moved = true; }
+      else if (openY && dy) { this.y += dy; moved = true; }
+    }
     this.z += (R.floor(this.x, this.y) - this.z) * 0.5;       // settle onto steps smoothly
     return moved;
   }
@@ -77,7 +82,7 @@ class Actor {
 export class Player extends Actor {
   constructor(g, x, y, yaw) {
     super(g, g.A.content.actors.bryan.model, 'bryan', x, y, yaw);
-    this.mode = 'move'; this.cool = 0; this.quickTurn = 0; this.target = null; this.hurtT = 0; this.grab = null; this.slowT = 0;
+    this.mode = 'move'; this.invulnT = 0; this.cool = 0; this.quickTurn = 0; this.target = null; this.hurtT = 0; this.grab = null; this.slowT = 0;
     this.anim.play('idle');
     this.updateHide();
   }
@@ -98,7 +103,8 @@ export class Player extends Actor {
     this.partTint = { hand_r: red(Math.min(1, k * 3)), forearm_r: red(Math.max(0, Math.min(1, k * 2 - 0.3))), upperarm_r: red(Math.max(0, k * 1.6 - 0.8)) };
   }
   hurt(dmg, opts = {}) {
-    if (this.mode === 'dead' || this.g.god) return;
+    if (this.mode === 'dead' || this.g.god || (!opts.scripted && this.invulnT > 0)) return;
+    this.invulnT = opts.scripted ? 0 : 0.65;
     const S = this.S;
     S.hp -= dmg; S.stats.damage += dmg; this.flashT = 0.25;
     this.g.sfx('hurt');
@@ -110,7 +116,7 @@ export class Player extends Actor {
   }
   // RE2-style grab: mash any direction / action to break free before the bite lands
   grabbedBy(e) {
-    if (this.mode === 'dead' || this.g.god) return false;
+    if (this.mode === 'dead' || this.mode === 'grabbed' || this.g.god || this.invulnT > 0) return false;
     this.mode = 'grabbed'; this.grab = { e, t: e.def.grab_time || 1.6, struggle: 0 };
     this.yaw = yawTo(this.x, this.y, e.x, e.y);
     this.anim.play('grabbed', { restart: true, fade: 0.05 });
@@ -123,6 +129,7 @@ export class Player extends Actor {
     this.grab = null;
     if (!G) return;
     const e = G.e;
+    if (pushed) this.invulnT = 0.8;
     if (pushed) {
       const f = fwd(this.yaw);
       for (let i = 0; i < 6; i++) e.move(f[0] * 0.1, f[1] * 0.1);
@@ -136,6 +143,7 @@ export class Player extends Actor {
 
   update(I) {
     const g = this.g;
+    this.invulnT = Math.max(0, this.invulnT - DT);
     this.cool = Math.max(0, this.cool - DT); this.flashT = Math.max(0, this.flashT - DT); this.slowT = Math.max(0, this.slowT - DT);
     this.updateInfection();
     if (this.updateScripted()) return;
@@ -174,12 +182,15 @@ export class Player extends Actor {
       this.anim.play(w.aim, { fade: 0.12 });
       if (I.left) { this.yaw += 110 * DT; this.target = null; }
       if (I.right) { this.yaw -= 110 * DT; this.target = null; }
+      if (!I.left && !I.right && !this.target?.hostile()) this.target = g.pickTarget();
       if (this.target && this.target.alive()) turnTo(this, yawTo(this.x, this.y, this.target.x, this.target.y), 420);
-      if (I.firePressed && this.cool <= 0) this.fire(w);
+      if (I.reloadPressed && this.cool <= 0) this.reload(w);
+      else if (I.firePressed && this.cool <= 0) this.fire(w);
       this.anim.update(DT);
       return;
     }
     if (this.mode === 'aim') { this.mode = 'move'; this.updateHide(); }
+    if (I.reloadPressed && w && this.cool <= 0) this.reload(w);
     const run = I.run && !danger && this.slowT <= 0;
     if (I.back && I.runPressed) { this.quickTurn = 180; return; }
     const turn = run ? 200 : 150;
@@ -247,12 +258,12 @@ export class Enemy extends Actor {
     if (spec.state === 'dead') {                                    // a corpse: lie where it fell
       this.state = 'dead'; this.anim.play('death', { restart: true, fade: 0 }); this.anim.t = 99;
     }
-    this.hidden = this.state === 'perched';
+    this.hidden = spec.hidden ?? (this.state === 'perched');
     this.wake = spec.wake_rect || null;
     this.t = 0; this.hitDone = false; this.cool = 0; this.flowT = 0; this.voice = 1 + Math.random() * 3;
     this.jitter = [(Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 1.2];
     if (this.state !== 'dead') this.anim.play(this.state === 'rise' ? 'rise' : 'idle', { restart: true, fade: 0 });
-    this.firedHp = {}; this.follow = !!spec.follow;
+    this.firedHp = { ...spec.firedHp }; this.follow = !!spec.follow;
     this.hide = new Set(spec.hide || def.hide || []);            // e.g. a holstered pistol on an NPC
   }
   alive() { return this.state !== 'dead' && this.state !== 'gone'; }
@@ -261,7 +272,8 @@ export class Enemy extends Actor {
   snapshot() {
     return { type: this.type, room: this.room, at: [this.x, this.y], yaw: this.yaw, hp: this.hp,
       state: !this.alive() ? this.state : ['idle', 'perched'].includes(this.state) ? this.state : this.B === 'npc' ? 'idle' : 'chase',
-      follow: this.follow || undefined, pose: this.poseName };
+      follow: this.follow || undefined, pose: this.poseName, wake_rect: this.wake,
+      firedHp: this.firedHp, hidden: this.hidden, hide: [...this.hide] };
   }
   alert() { if (this.state === 'idle' && this.B !== 'npc') this.state = 'chase'; }
   stagger(t) { if (this.alive() && this.B !== 'hazard') { this.state = 'hurt'; this.t = t; this.anim.play('hurt', { restart: true, fade: 0.04 }); } }
@@ -339,12 +351,17 @@ export class Enemy extends Actor {
         if (this.anim.done()) { this.state = 'chase'; this.cool = def.spit_cooldown || 2.6; }
         return;
       }
+      case 'charge_windup': {
+        this.t -= DT; this.anim.play('idle');
+        if (this.t <= 0) { this.state = 'charge'; this.t = 0; this.hitDone = false; }
+        return;
+      }
       case 'charge': {
         this.t += DT;
         const f = fwd(this.yaw);
         const moved = this.move(f[0] * (def.charge_speed || 3) * DT, f[1] * (def.charge_speed || 3) * DT);
         this.anim.play('run');
-        if (dist < def.range + 0.4 && !this.hitDone) { this.hitDone = true; p.hurt(def.charge_damage || def.damage); const k = 1.2 / Math.max(dist, 0.1); for (let i = 0; i < 6; i++) p.move(dx * k / 6, dy * k / 6); }
+        if (dist < def.range + 0.4 && !this.hitDone && g.room.los(this.x, this.y, p.x, p.y)) { this.hitDone = true; p.hurt(def.charge_damage || def.damage); const k = 1.2 / Math.max(dist, 0.1); for (let i = 0; i < 6; i++) p.move(dx * k / 6, dy * k / 6); }
         if (!moved || this.t > 1.6) { this.state = 'chase'; this.cool = 1.0; }
         return;
       }
@@ -366,7 +383,7 @@ export class Enemy extends Actor {
       return;
     }
     if (this.B === 'brute' && dist > 3.5 && dist < 9 && this.cool <= 0 && Math.abs(d) < 15 && Math.random() < 0.02) {
-      this.state = 'charge'; this.t = 0; this.hitDone = false; g.sfx('roar', g.pan(this.x, this.y));
+      this.state = 'charge_windup'; this.t = 0.65; this.hitDone = false; g.sfx('roar', g.pan(this.x, this.y));
       return;
     }
     if (dist < def.range && Math.abs(d) < 35 && this.cool <= 0 && p.mode !== 'grabbed') {
@@ -427,7 +444,7 @@ export class Enemy extends Actor {
     this.t += DT;
     if (!this.hitDone && this.t >= def.hit_time) {
       this.hitDone = true;
-      const inReach = dist < def.range + 0.5 && Math.abs(angDiff(face, this.yaw)) < 60;
+      const inReach = dist < def.range + 0.5 && Math.abs(angDiff(face, this.yaw)) < 60 && g.room.los(this.x, this.y, p.x, p.y);
       if (inReach) {
         if (def.grab && p.mode !== 'grabbed' && p.mode !== 'dead' && Math.random() < (def.grab_chance ?? 0.7) && p.grabbedBy(this)) {
           this.state = 'grab'; this.anim.play('bite', { restart: true, fade: 0.08 });

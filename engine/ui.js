@@ -64,7 +64,7 @@ export class UI {
     if (!M.sub && (I.prevTabPressed || I.nextTabPressed)) {
       M.tab = tabs[(tabs.indexOf(M.tab) + (I.nextTabPressed ? 1 : 2)) % 3]; g.sfx('cursor'); return;
     }
-    if (I.cancelPressed || (I.menuPressed && !M.sub)) { if (M.sub) M.sub = null; else this.menu = null; return; }
+    if (I.cancelPressed || (I.menuPressed && !M.sub)) { if (M.sub) M.sub = null; else if (M.combine != null) M.combine = null; else this.menu = null; return; }
     if (M.tab === 'map') {
       if (I.confirmPressed) { M.journey = !M.journey; g.sfx('cursor'); }
       const nodes = g.A.content.journey.nodes;
@@ -82,7 +82,7 @@ export class UI {
       if (I.leftPressed || I.rightPressed) { M.sel ^= 1; g.sfx('cursor'); }
       if (I.upPressed) { M.sel = (M.sel + n - 2) % n; g.sfx('cursor'); }
       if (I.downPressed) { M.sel = (M.sel + 2) % n; g.sfx('cursor'); }
-      if (I.confirmPressed) { const a = M.combine; M.combine = null; if (S.inventory[M.sel] && M.sel !== a) this.combine(a, M.sel); else g.sfx('cursor'); }
+      if (I.confirmPressed) { const a = M.combine; M.combine = null; if (S.inventory[M.sel]) this.combine(a, M.sel); else g.sfx('cursor'); }
       return;
     }
     if (M.sub) {
@@ -138,6 +138,10 @@ export class UI {
     }
     const r = this.recipes().find(r => (r[0] === A.id && r[1] === B.id) || (r[0] === B.id && r[1] === A.id));
     if (!r) { g.sfx('locked'); return this.say(["They can't be combined."]); }
+    if (a === b && A.n < 2) return this.say(['You need two of that item.']);
+    const resultStack = S.inventory.find(i => i.id === r[2]);
+    const freed = a === b ? (A.n === 2 ? 1 : 0) : (A.n === 1 ? 1 : 0) + (B.n === 1 ? 1 : 0);
+    if (!resultStack && S.inventory.length - freed >= g.slots) return this.say(['Make room for the combined item first.']);
     const ida = A.id, idb = B.id;
     S.consume(ida, 1); S.consume(idb, 1);
     const at = Math.min(a, b, S.inventory.length);
@@ -190,7 +194,7 @@ export class UI {
       this.box(x, y, 68, 42, [0, 0, 0], 0.9, B.side === 0 && k === B.isel ? GOLD : [110, 110, 104]);
       const it = S.inventory[k];
       if (!it) continue;
-      PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
+      PSX.blitSprite(fb, this.icon(it.id), x + 2, y + 2);
       const def = this.items[it.id];
       if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
     }
@@ -242,9 +246,41 @@ export class UI {
 
   drawOverlays() {
     if (this.boxUI) { this.drawBox(); if (this.msg) this.drawMsg(); return; }
-    if (this.menu) { this.drawMenu(); if (this.msg) this.drawMsg(); return; }
+    if (this.menu) { this.drawMenu(); if (this.file) this.drawFile(); if (this.msg) this.drawMsg(); return; }
     else if (this.file) this.drawFile();
     else if (this.msg) this.drawMsg();
+    else if (!this.g.cinematic) this.drawHUD();
+  }
+  drawHUD() {
+    const g = this.g, p = g.player, fb = this.fb;
+    if (!p || p.mode === 'dead' || g.fx.card || g.fx.fade > 0) return;
+    if (g.notice && g.notice.until > g.time) {
+      this.box(8, 8, 304, 30);
+      this.wrap(g.notice.text, 288).slice(0,2).forEach((s,i)=>this.F.draw(fb,s,16,12+i*12,GOLD));
+    }
+    if (p.mode === 'grabbed') { this.box(40, 208, 240, 23); this.center('TAP DIRECTION / ACTION TO ESCAPE', 214, GOLD); return; }
+    const w = p.weapon();
+    if (p.mode === 'aim' || p.mode === 'fire') {
+      this.box(8, 8, 100, 22);
+      this.F.draw(fb, `${g.state.mag[g.state.equipped] || 0} / ${g.state.count(w?.ammo)}   R: LOAD`, 14, 14, GOLD);
+      if (p.target?.hostile()) {
+        const q = g.room.cameras[g.cam].cam.project(p.target.x,p.target.y,p.target.z+p.target.chest());
+        if(q && q[0]>5 && q[0]<315 && q[1]>5 && q[1]<205) {
+          PSX.rect(fb,Math.round(q[0])-3,Math.round(q[1])-3,7,1,...GOLD);
+          PSX.rect(fb,Math.round(q[0])-3,Math.round(q[1])+3,7,1,...GOLD);
+        }
+      }
+      return;
+    }
+    if (!g.hints || p.mode !== 'move') return;
+    const c = g.nearest();
+    if (!c) return;
+    const lines = this.wrap('E / ENTER: ' + g.interactionLabel(c), 282).slice(0,2);
+    const extra = g.nearby().length > 1 ? 'V: next nearby action' : '';
+    const h = 10 + (lines.length + (extra ? 1 : 0)) * 12;
+    this.box(8, 232-h, 304, h, [5,8,10], .92, [120,135,122]);
+    lines.forEach((l,i)=>this.F.draw(fb,l,16,237-h+i*12,GOLD));
+    if(extra) this.F.draw(fb,extra,16,237-h+lines.length*12,GREY);
   }
   drawMsg() {
     const m = this.msg, F = this.F;
@@ -332,7 +368,7 @@ export class UI {
       this.box(x, y, 68, 42, [0, 0, 0], 0.9, k === M.sel ? [255, 220, 90] : [110, 110, 104]);
       const it = S.inventory[k];
       if (!it) continue;
-      PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
+      PSX.blitSprite(fb, this.icon(it.id), x + 2, y + 2);
       const def = this.items[it.id];
       if (def.kind !== 'file' && def.kind !== 'key' && def.kind !== 'tool') F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
       if (M.combine === k) this.box(x + 1, y + 1, 66, 40, [0, 0, 0], 0, [120, 220, 255]);
@@ -347,7 +383,7 @@ export class UI {
     }
     if (M.combine !== undefined && M.combine !== null) F.draw(fb, 'COMBINE WITH?', 170, 170, GOLD);
     if (M.sub) {
-      const x = 170 + (M.sel % 2) * 72 + 30, y = 8 + Math.floor(M.sel / 2) * 44 + 8;
+      const x = Math.min(248, 170 + (M.sel % 2) * 72 + 30), y = 8 + Math.floor(M.sel / 2) * 44 + 8;
       this.box(x, y, 60, 8 + M.sub.opts.length * 13, [20, 20, 30], 0.97, [255, 220, 90]);
       M.sub.opts.forEach((o, i) => F.draw(fb, o, x + 8, y + 4 + i * 13, i === M.sub.sel ? [255, 230, 120] : [180, 180, 170]));
     }
@@ -437,10 +473,10 @@ export class UI {
     if (!this.icons) this.icons = {};
     if (!this.icons[id]) {
       const def = this.items[id], m = this.g.A.models[def.model];
-      const fb = new PSX.Frame(64, 44);
-      for (let y = 0; y < 44; y++) PSX.rect(fb, 0, y, 64, 1, 10 + y / 3, 12 + y / 3, 24 + y / 2);   // dim backdrop, like the originals
+      const fb = new PSX.Frame(64, 38);
+      for (let y = 0; y < 38; y++) PSX.rect(fb, 0, y, 64, 1, 10 + y / 3, 12 + y / 3, 24 + y / 2);   // dim backdrop, like the originals
       const gun = !!def.weapon;
-      PSX.render(fb, framed(m, 64, 44, gun ? -90 : -30, gun ? 1.05 : 1.0, gun ? 0.15 : 0.45), [{ model: m, x: 0, y: 0, z: 0, yaw: 0, pose: {} }],
+      PSX.render(fb, framed(m, 64, 38, gun ? -90 : -30, gun ? 1.05 : 1.0, gun ? 0.15 : 0.45), [{ model: m, x: 0, y: 0, z: 0, yaw: 0, pose: {} }],
         new PSX.Lights([[0.5, 0.7, -0.6], [-0.6, -0.2, -0.2]], [[0.9, 0.88, 0.8], [0.3, 0.32, 0.4]], [0.45, 0.45, 0.48]));
       this.icons[id] = fb;
     }
@@ -456,12 +492,12 @@ export class UI {
     this.center(T.title, 50, [Math.floor(200 * flick), 10, 10], 2);
     this.center(T.subtitle, 84, [210, 200, 180]);
     this.center(T.tagline, 100, [130, 124, 116]);
-    const opts = ['NEW GAME', 'LOAD GAME'];
+    const opts = g.titleOptions();
     opts.forEach((o, i) => {
-      const dis = i === 1 && !hasSaves;
+      const dis = false;
       this.center((i === sel ? '> ' : '  ') + o + (i === sel ? ' <' : '  '), 136 + i * 16, dis ? [90, 90, 90] : i === sel ? GOLD : WHITE);
     });
-    ['ARROWS: move    SHIFT: run    DOWN+SHIFT: 180', 'Z: aim    X: fire    ENTER: action', 'TAB: status    M: map    ESC: back']
+    ['ARROWS: move    SHIFT: run    DOWN+SHIFT: 180', 'Z: aim   X: fire   R: reload   E: action', 'TAB: status   M: map   P: pause / settings']
       .forEach((l, i) => this.center(l, 188 + i * 13, GREY));
   }
   drawIntro(t) {
@@ -494,7 +530,7 @@ export class UI {
     PSX.darken(fb, Math.max(0.25, 1 - t * 0.4));
     PSX.tintScreen(fb, 90, 0, 0, Math.min(0.5, t * 0.25));
     this.center('YOU DIED', 100, RED, 2);
-    if (t > 2) this.center(Saves.any() ? 'ENTER: load a save    ESC: title' : 'Press ENTER to try again', 150, [200, 200, 200]);
+    if (t > 2) this.center(Saves.readCheckpoint() ? 'ENTER: chapter checkpoint    ESC: title' : Saves.any() ? 'ENTER: load a save    ESC: title' : 'Press ENTER to try again', 150, [200, 200, 200]);
   }
   drawChapter(ch, t) {
     const fb = this.fb, S = this.g.state;

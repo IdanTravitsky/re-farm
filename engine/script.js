@@ -160,7 +160,7 @@ export class Script {
         break;
       }
       case 'heal': g.player.heal(v); break;
-      case 'damage': g.player.hurt(v); break;
+      case 'damage': g.player.hurt(v, { scripted: true }); break;
       case 'movie': g.ui.playMovie(v); c.block = 'movie'; break;
       case 'fade': {
         const out = 'out' in v, secs = (out ? v.out : v.in) || 0.001;

@@ -53,7 +53,7 @@ export class Room {
 
   // movement line of sight (strict); skipEnds>0 for "can I see it" where bodies overlap obstacles
   los(ax, ay, bx, by, skipEnds = 0) {
-    const d = Math.hypot(bx - ax, by - ay), n = Math.ceil(d / 0.15);
+    const d = Math.hypot(bx - ax, by - ay), n = Math.ceil(d / (this.res * 0.5));
     for (let s = 1; s < n; s++) {
       const t = s / n;
       if (skipEnds && (t * d < skipEnds || (1 - t) * d < skipEnds)) continue;
@@ -127,12 +127,13 @@ export class Room {
       const ii = i + di, jj = j + dj;
       if (ii < 0 || jj < 0 || ii >= n || jj >= m) continue;
       const d = dist[jj * n + ii];
+      if (di && dj && (!this.coarse[j * n + ii] || !this.coarse[jj * n + i])) continue;
       if (d >= 0 && (here < 0 || d < here)) cand.push([d, ii, jj]);
     }
     cand.sort((a, b) => a[0] - b[0]);
     for (const [, ii, jj] of cand) {
       const dx = this.x0 + (ii + 0.5) * r2 - x, dy = this.y0 + (jj + 0.5) * r2 - y, l = Math.hypot(dx, dy) || 1;
-      if (this.walkable(x + dx / l * 0.15, y + dy / l * 0.15)) return [dx / l, dy / l];
+      if (this.walkable(x + dx / l * 0.15, y + dy / l * 0.15) && this.los(x, y, x + dx / l * 0.15, y + dy / l * 0.15)) return [dx / l, dy / l];
     }
     return null;
   }

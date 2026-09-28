@@ -4,26 +4,57 @@
 <meta charset="utf-8">
 <title>Resident Evil: Night Zero</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080a09">
+<link rel="icon" href="data:,">
 <style>
-  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
-  body { display: flex; align-items: center; justify-content: center; }
-  #wrap { position: relative; width: min(100vw, 133.333vh); height: min(75vw, 100vh); }
-  #screen { width: 100%; height: 100%; image-rendering: pixelated; image-rendering: crisp-edges; display: block; }
-  /* faint CRT scanlines; toggle with the S key */
-  #scan { position: absolute; inset: 0; pointer-events: none;
-    background: repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0, rgba(0,0,0,0) 2px, rgba(0,0,0,.18) 3px, rgba(0,0,0,0) 4px); }
-  #scan.off { display: none; }
+  :root { color-scheme: dark; font-family: system-ui,sans-serif; background:#080a09; color:#eee9dc; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  #wrap { position:relative; width:min(100vw,133.333vh); height:min(75vw,100vh); overflow:hidden; background:#000; }
+  #screen { width:100%; height:100%; display:block; image-rendering:pixelated; outline:none; }
+  #screen.enhanced { image-rendering:auto; }
+  #scan { position:absolute; inset:0; pointer-events:none; background:repeating-linear-gradient(to bottom,transparent 0,transparent 2px,#0003 3px,transparent 4px); }
+  [hidden] { display:none !important; }
+  #settings-button { position:fixed; right:12px; top:12px; opacity:.65; font-size:12px; padding:7px 10px; }
+  button,select { color:inherit; background:#171d1a; border:1px solid #66766c; border-radius:4px; padding:10px 14px; cursor:pointer; font:inherit; }
+  button:hover,button:focus-visible { background:#354338; opacity:1!important; outline:2px solid #bdc8a0; outline-offset:2px; }
+  dialog { width:min(460px,92vw); max-height:92vh; border:1px solid #71816d; border-radius:8px; padding:26px; background:#101613; color:inherit; box-shadow:0 16px 90px #000b; }
+  dialog::backdrop { background:#000b; }
+  h1 { font-size:23px; margin:4px 0 6px; font-weight:550; letter-spacing:.04em; }
+  .eyebrow { font-size:10px; letter-spacing:.22em; color:#b0bd9a; }
+  .muted { color:#a8afa7; font-size:13px; line-height:1.6; }
+  label { display:flex; align-items:center; justify-content:space-between; gap:12px; font-size:14px; margin:14px 0; }
+  input[type=range] { max-width:170px; accent-color:#beca9e; }
+  input[type=checkbox] { width:18px; height:18px; accent-color:#beca9e; }
+  .actions { display:flex; gap:10px; margin-top:22px; flex-wrap:wrap; }
+  #resume { flex:1; background:#d2ddbb; color:#162018; font-weight:600; }
+  #status { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; text-align:center; background:#080a09; padding:30px; }
+  #status p { max-width:400px; line-height:1.7; }
+  kbd { color:#e4e7d7; font:inherit; }
 </style>
 </head>
 <body>
-<div id="wrap">
-  <canvas id="screen" width="320" height="240" tabindex="0"></canvas>
-  <div id="scan"></div>
-</div>
-<script>
-  addEventListener('keydown', e => { if (e.code === 'KeyS' && e.altKey) document.getElementById('scan').classList.toggle('off'); });
-  document.getElementById('screen').focus();
-</script>
+<main id="wrap" aria-label="Resident Evil Night Zero game">
+  <canvas id="screen" width="640" height="480" tabindex="0" aria-label="Game. Arrow keys move, Shift runs, Z aims, X fires, Enter interacts, P pauses."></canvas>
+  <div id="scan" hidden></div>
+  <div id="status" role="status"><p><span class="eyebrow">RESIDENT EVIL · NIGHT ZERO</span><br>Loading the night…</p></div>
+</main>
+<button id="settings-button" aria-label="Pause and open settings">P · Settings</button>
+<dialog id="settings" aria-labelledby="settings-title">
+  <div class="eyebrow">NIGHT ZERO</div>
+  <h1 id="settings-title">Take a breath.</h1>
+  <p class="muted">The game is paused.</p>
+  <label>Rendering <select id="quality"><option value="2">Enhanced · 640 × 480</option><option value="1">Classic · 320 × 240</option></select></label>
+  <label>Brightness <input id="brightness" type="range" min="0.8" max="1.6" value="1.12" step="0.02" aria-label="Brightness"></label>
+  <label>Interaction hints <input id="hints" type="checkbox" checked></label>
+  <label>CRT scanlines <input id="scanlines" type="checkbox"></label>
+  <label>Reduce flashes and shake <input id="reduce-motion" type="checkbox"></label>
+  <details><summary class="muted">Controls &amp; saving</summary>
+  <p class="muted"><kbd>↑ ↓</kbd> move · <kbd>← →</kbd> turn · <kbd>Shift</kbd> run<br><kbd>↓ + Shift</kbd> quick turn · <kbd>Z / Q</kbd> aim · <kbd>X / Space</kbd> fire<br><kbd>E / Enter</kbd> interact · <kbd>V</kbd> cycle nearby actions<br><kbd>R</kbd> reload · <kbd>Tab</kbd> inventory · <kbd>M</kbd> map<br>Controller: left stick / D-pad move, B run, triggers aim, A fire / interact, X cycle, Y inventory / aimed reload.</p>
+  <p class="muted">A checkpoint is saved at the start of each chapter. Typewriters save your exact progress using ink ribbons. Saves stay in this browser.</p></details>
+  <div class="actions"><button id="resume">Resume</button><button id="fullscreen">Fullscreen</button></div>
+</dialog>
 <script type="module" src="engine/main.js"></script>
 </body>
 </html>
