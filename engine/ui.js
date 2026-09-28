@@ -1,6 +1,7 @@
 // All screens and overlays. Drawing is skipped entirely when running headless.
 import * as PSX from './psx.js';
-import { Saves } from './state.js';
+import { Saves, DIFFICULTY } from './state.js';
+import { check } from './script.js';
 import { wrapText, paginate, fitText } from './text.js';
 
 const D2R = Math.PI / 180;
@@ -434,16 +435,18 @@ export class UI {
     this.box(8, 8, 304, 212, [2, 8, 20], 0.95, [90, 120, 170]);
     const locRooms = g.location.rooms.filter(r => S.visited[r] && g.A.rooms[r]).map(r => g.A.rooms[r]);
     F.draw(fb, g.location.title.toUpperCase(), 16, 12, GOLD);
-    F.draw(fb, 'ENTER: COUNTY', 232, 12, [120, 140, 170]);
+    F.draw(fb, 'ENTER: COUNTY', 306 - F.width('ENTER: COUNTY'), 12, [120, 140, 170]);
     if (!locRooms.length) return;
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
     for (const r of locRooms) { const m = r.map; x0 = Math.min(x0, m.x0); y0 = Math.min(y0, m.y0); x1 = Math.max(x1, m.x0 + m.w * m.res); y1 = Math.max(y1, m.y0 + m.h * m.res); }
-    const sc = Math.min(284 / (x1 - x0), 176 / (y1 - y0));
-    const ox = 18 + (284 - (x1 - x0) * sc) / 2, oy = 30 + (176 - (y1 - y0) * sc) / 2;
+    const sc = Math.min(284 / (x1 - x0), 168 / (y1 - y0));          // (the legend sits under it)
+    const ox = 18 + (284 - (x1 - x0) * sc) / 2, oy = 30 + (168 - (y1 - y0) * sc) / 2;
     const toS = (x, y) => [ox + (x - x0) * sc, oy + (y1 - y) * sc];
+    // RE2 (2019) map: a room stays red while it still holds something to take, turns blue once cleared
+    const left = (rid) => (g.location.pickups || []).some(pk => pk.room === rid && !S.taken[pk.id] && !pk.set_piece && check(pk.when, g));
     for (const r of locRooms) {
       const m = r.map, cur = r.id === S.room;
-      const col = cur ? [200, 120, 40] : [40, 80, 160];
+      const col = cur ? [200, 120, 40] : left(r.id) ? [150, 34, 30] : [40, 80, 160];
       for (let j = 0; j < m.h; j++) for (let i = 0; i < m.w; i++) {
         const b = j * m.w + i;
         if (!((r.mapCells[b >> 3] >> (7 - (b & 7))) & 1)) continue;
@@ -451,13 +454,16 @@ export class UI {
         PSX.rect(fb, Math.floor(sx), Math.floor(sy), Math.max(1, Math.ceil(m.res * sc)), Math.max(1, Math.ceil(m.res * sc)), ...col);
       }
       const [cx, cy] = toS(m.x0 + m.w * m.res / 2, m.y0 + m.h * m.res / 2);
-      F.draw(fb, r.name, Math.round(cx - F.width(r.name) / 2), Math.round(cy - 5), cur ? [255, 230, 190] : [170, 190, 230]);
+      F.draw(fb, r.name, Math.max(12, Math.min(308 - F.width(r.name), Math.round(cx - F.width(r.name) / 2))), Math.round(cy - 5), cur ? [255, 230, 190] : [170, 190, 230]);   // labels stay inside the frame
     }
     for (const d of g.location.doors) for (const s of [d.a, d.b]) {
       if (!S.visited[s.room]) continue;
       const [sx, sy] = toS(...s.at);
       PSX.rect(fb, Math.round(sx) - 1, Math.round(sy) - 1, 3, 3, 240, 240, 240);
     }
+    PSX.rect(fb, 16, 208, 6, 6, 150, 34, 30); F.draw(fb, 'ITEMS LEFT', 26, 206, [190, 150, 150]);
+    PSX.rect(fb, 110, 208, 6, 6, 40, 80, 160); F.draw(fb, 'CLEARED', 120, 206, [150, 170, 210]);
+    PSX.rect(fb, 190, 208, 6, 6, 200, 120, 40); F.draw(fb, 'YOU ARE HERE', 200, 206, [220, 190, 150]);
     // player arrow (blinks)
     if (Math.floor(g.time * 3) % 2 === 0) {
       const [px, py] = toS(g.player.x, g.player.y), a = g.player.yaw * D2R;
@@ -533,6 +539,18 @@ export class UI {
     ['ARROWS: move    SHIFT: run    DOWN+SHIFT: 180', 'Z: aim   X: fire   R: reload   E: action', 'TAB: status   M: map   P: pause / settings']
       .forEach((l, i) => this.center(l, 188 + i * 13, GREY));
   }
+  drawDifficulty(sel) {
+    const g = this.g, fb = this.fb, C = g.titleCam;
+    if (C && C.plate) fb.blit(C.plate.px); else fb.fill(0, 0, 0);
+    PSX.darken(fb, 0.55);
+    this.center('SELECT DIFFICULTY', 40, GOLD, 2);
+    const modes = Object.values(DIFFICULTY);
+    modes.forEach((m, i) => this.center((i === sel ? '> ' : '  ') + m.label + (i === sel ? ' <' : '  '), 92 + i * 18, i === sel ? GOLD : WHITE));
+    const m = modes[sel];
+    if (m) m.desc.flatMap(l => this.wrap(l, 290)).slice(0, 4).forEach((l, i) => this.center(l, 150 + i * 12, [190, 186, 170]));
+    if (g.bonusUnlocked()) this.center(`BONUS  INFINITE AMMO: ${g.infiniteAmmo ? 'ON' : 'OFF'}   (LEFT / RIGHT)`, 192, g.infiniteAmmo ? GOLD : GREY);
+    this.center('ENTER: choose    ESC: back', 214, GREY);
+  }
   drawIntro(t) {
     const fb = this.fb, pages = this.introPages(), page = this.g.introPage || 0, lines = pages[page];
     fb.fill(0, 0, 0);
@@ -580,7 +598,8 @@ export class UI {
       this.center('THE END', 137, RED, 2);
       const pts = (seconds < 5400 ? 2 : seconds < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
       const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
-      this.center(`TIME ${tm}   SAVES ${S.saves}   KILLS ${S.stats.kills}`, 171, [190, 186, 170]);
+      this.center(`TIME ${tm}   SAVES ${S.saves}   KILLS ${S.stats.kills}`, 163, [190, 186, 170]);
+      this.center((({ assisted: 'ASSISTED', hardcore: 'HARDCORE' })[S.difficulty] || 'STANDARD'), 176, GREY);
       this.center(`RANK  ${rank}`, 191, GOLD, 2);
       if (t > 5) this.center('PRESS ENTER', 222, GREY);
       return;

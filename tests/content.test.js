@@ -17,12 +17,14 @@ test('every model has valid palettes, texture indices, topology and named item/a
  for(const [id,d]of Object.entries(A.content.items))assert.ok(A.models[d.model],id);
  for(const [id,d]of Object.entries(A.content.actors))assert.ok(A.models[d.model],id);
 });
+// Enhanced plates may be JPEG (decoded by the browser); Node reads the size from the frame header
+function jpegSize(b){for(let i=2;i<b.length;){if(b[i]!==0xFF){i++;continue;}const m=b[i+1],len=(b[i+2]<<8)|b[i+3];if(m>=0xC0&&m<=0xCF&&m!==0xC4&&m!==0xC8&&m!==0xCC)return[(b[i+7]<<8)|b[i+8],(b[i+5]<<8)|b[i+6]];i+=2+len;}return[0,0];}
 test('all scene plates and depth maps decode and match their camera dimensions',async()=>{
  const visual=new Assets({...platform,headless:false});
  let cameras=0;
  for(const id of Object.keys(A.content.world.rooms)){
   const r=await visual.room(id);
-  for(const c of r.cameras){cameras++;assert.equal(c.plate.w,320,c.id);assert.equal(c.plate.h,240,c.id);assert.equal(c.depth.length,320*240,c.id);if(c.plateHDFile){assert.equal(c.plateHD.w,640);assert.equal(c.plateHD.h,480);}assert.ok(c.depth.every(Number.isFinite),c.id);}
+  for(const c of r.cameras){cameras++;assert.equal(c.plate.w,320,c.id);assert.equal(c.plate.h,240,c.id);assert.equal(c.depth.length,320*240,c.id);if(c.plateHDFile){const [w,h]=c.plateHD?[c.plateHD.w,c.plateHD.h]:jpegSize(await platform.bytes('bg/'+c.plateHDFile));assert.equal(w,640,c.id);assert.equal(h,480,c.id);}assert.ok(c.depth.every(Number.isFinite),c.id);}
  }
  assert.equal(cameras,196);
 });

@@ -92,3 +92,15 @@ export const Saves = {
     try { const e = JSON.parse((this.store || globalThis.localStorage)?.getItem(CHECKPOINT) || 'null'); return valid(e) ? GameState.from(e.state) : null; } catch { return null; }
   },
 };
+
+// Difficulty (after RE2, 2019). STANDARD is the tuned game; the others scale around it.
+export const DIFFICULTY = {
+  assisted: { label: 'ASSISTED', hurt: 0.6, ammo: 1.5, regen: 66, ribbon: false,
+    desc: ['Lighter wounds. Health slowly recovers up to CAUTION.', 'More ammunition. Save at typewriters without ink ribbons.'] },
+  standard: { label: 'STANDARD', hurt: 1, ammo: 1, regen: 0, ribbon: true,
+    desc: ['The intended experience.', 'Ammunition is scarce. Saving needs an ink ribbon.'] },
+  hardcore: { label: 'HARDCORE', hurt: 1.4, ammo: 0.7, regen: 0, ribbon: true,
+    desc: ['Every bite is serious. Ammunition is rarer still.', 'For those who know the road.'] },
+};
+export const diffOf = (S) => DIFFICULTY[S?.difficulty] || DIFFICULTY.standard;
+

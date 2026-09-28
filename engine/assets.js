@@ -9,6 +9,12 @@ export const BrowserPlatform = {
   base: 'data/',
   async json(p) { const r = await fetch(this.base + p); if (!r.ok) throw new Error(p + ' ' + r.status); return r.json(); },
   async bytes(p) { const r = await fetch(this.base + p); if (!r.ok) throw new Error(p + ' ' + r.status); return new Uint8Array(await r.arrayBuffer()); },
+  async decodeImage(bytes) {                            // JPEG (the Enhanced plates): the browser's own decoder
+    const bmp = await createImageBitmap(new Blob([bytes]));
+    const c = new OffscreenCanvas(bmp.width, bmp.height), cx = c.getContext('2d');
+    cx.drawImage(bmp, 0, 0);
+    return { w: bmp.width, h: bmp.height, px: cx.getImageData(0, 0, bmp.width, bmp.height).data };
+  },
   async inflate(z) {                                     // zlib stream -> bytes (PNG IDAT)
     const ds = new DecompressionStream('deflate');
     const out = new Response(new Blob([z]).stream().pipeThrough(ds));
@@ -21,7 +27,10 @@ export class Assets {
   constructor(platform = BrowserPlatform) { this.P = platform; this.models = {}; this.rooms = {}; this.locations = {}; this.pending = {}; }
 
   async png(p) { return decodePNG(await this.P.bytes(p), (z) => this.P.inflate(z)); }
-  async image(p) { return toRGBA(await this.png(p)); }
+  async image(p) {
+    if (/\.jpe?g$/i.test(p) && this.P.decodeImage) return this.P.decodeImage(await this.P.bytes(p));
+    return toRGBA(await this.png(p));
+  }
 
   async boot() {
     const P = this.P;
@@ -58,11 +67,11 @@ export class Assets {
   async loadPlates(room) {
     await Promise.all(room.cameras.map(async c => {
       c.plate = await this.image('bg/' + c.id + '.png');
-      if (c.plateHDFile) c.plateHD = await this.image('bg/' + c.plateHDFile);
+      if (c.plateHDFile) c.plateHD = await this.image('bg/' + c.plateHDFile).catch(() => null);   // optional: Classic plates still work
       const d = await this.png('bg/' + c.id + '_depth.png');
       c.depth = new Float32Array(d.w * d.h);
       for (let i = 0; i < c.depth.length; i++) c.depth[i] = ((d.data[i * 3] << 8) | d.data[i * 3 + 1]) / 100;
-      await Promise.all(c.sprites.map(async s => { s.img = await this.image('bg/' + s.file); }));
+      await Promise.all(c.sprites.map(async s => { s.img = await this.image('bg/' + s.file); if (s.file_hd) { s.imgHD = await this.image('bg/' + s.file_hd); s.imgHD.hd = true; } }));
     }));
   }
   roomLoaded(id) { return !!this.rooms[id]; }

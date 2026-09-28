@@ -4,7 +4,7 @@ import {applyMonsterForm} from './finale.js';
 import * as PSX from './psx.js';
 import * as Audio from './audio.js';
 import { Music } from './music.js';
-import { GameState, Saves } from './state.js';
+import { GameState, Saves, DIFFICULTY, diffOf } from './state.js';
 import { Script, check } from './script.js';
 import { Player, Enemy, DT, angDiff, fwd, yawTo } from './actors.js';
 import { UI } from './ui.js';
@@ -105,6 +105,8 @@ export class Game {
     this.resetScene();
     const start = this.A.content.game.start, items = this.A.content.items;
     this.state = new GameState(start);
+    this.state.difficulty = this.pendingDifficulty || 'standard';
+    this.state.infiniteAmmo = !!(this.infiniteAmmo && this.bonusUnlocked());
     for (const [id, n] of start.inventory) this.state.add(id, n, items, this.slots);
     this.player = null;
     const yaw = start.face ? yawTo(start.at[0], start.at[1], start.face[0], start.face[1]) : 0;
@@ -211,6 +213,7 @@ export class Game {
   chapterEnd(v) {
     this.stashEnemies();
     this.chapter = { ...v, hasNext: !!this.A.content.world.locations[v.next] };
+    if (v.final) try { (Saves.store || globalThis.localStorage).setItem('night_zero_cleared', '1'); } catch {}      // unlocks the bonus on the difficulty screen
     this.mode = 'chapter'; this.t = 0;
     this.music.play(null);
   }
@@ -240,9 +243,9 @@ export class Game {
     this.stashEnemies();
     S.pos = { x: p.x, y: p.y, yaw: p.yaw };
     const saved = GameState.from(S.toJSON());
-    saved.consume('ink_ribbon', 1); saved.saves++;
+    if (diffOf(S).ribbon) saved.consume('ink_ribbon', 1); saved.saves++;
     if (!Saves.write(slot, saved, this.room.name)) return false;
-    S.consume('ink_ribbon', 1); S.saves++;
+    if (diffOf(S).ribbon) S.consume('ink_ribbon', 1); S.saves++;
     return true;
   }
   async loadFrom(slot) {
@@ -309,7 +312,7 @@ export class Game {
     if (best.kind === 'door') return this.tryDoor(best.door, best.side);
     if (best.kind === 'examine') return this.examine(best.ex);
     if (best.kind === 'typewriter') {
-      if (!this.state.has('ink_ribbon')) return this.ui.say(["It's a typewriter.", 'You need an INK RIBBON to record your progress.']);
+      if (diffOf(this.state).ribbon && !this.state.has('ink_ribbon')) return this.ui.say(["It's a typewriter.", 'You need an INK RIBBON to record your progress.']);
       return this.ui.ask('Will you use an INK RIBBON to record your progress?', () => { this.mode = 'save'; this.sel = 0; });
     }
     if (best.kind === 'box') { this.sfx('box'); return this.ui.openBox(); }
@@ -327,12 +330,13 @@ export class Game {
     this.ui.ask(pk.ask || `Will you take the ${def.name}?`, () => {
       p.mode = 'pickup'; p.anim.play('pickup', { restart: true });
       p.pickDone = () => {
-        S.add(pk.item, pk.count ?? 1, this.A.content.items, this.slots);
+        const base = pk.count ?? 1, got = def.kind === 'ammo' ? Math.max(1, Math.round(base * diffOf(S).ammo)) : base;
+        S.add(pk.item, got, this.A.content.items, this.slots);
         if (def.kind === 'weapon' && !(S.equipped && S.has(S.equipped))) { S.equipped = pk.item; p.updateHide(); }   // empty hands take the gun
         S.taken[pk.id] = true;
         this.sfx('pickup');
-        const n = pk.count ?? 1;                                 // every pickup confirms what you got, like the originals
-        this.ui.say(pk.taken || [`You got the ${def.name}${n > 1 && def.kind !== 'weapon' ? ` x${n}` : ''}.`]);
+        const n = got, plain = `You got the ${def.name}${n > 1 && def.kind !== 'weapon' ? ` x${n}` : ''}.`;   // every pickup confirms what you got
+        this.ui.say(!pk.taken ? [plain] : got === base ? pk.taken : [plain, ...pk.taken.slice(1).filter(l => !/\d/.test(l))]);   // a scaled count never shows the authored number
         if (pk.do) this.script.start(pk.do, pk.id);
         this.script.fire('pickup', { id: pk.id });
       };
@@ -423,6 +427,24 @@ export class Game {
     this.door = { door: { id: null }, kind: transition, to: { room, spawn: at, yaw }, ready: false, finishing: false };
     const pendingDoor = this.door;
     this.A.room(room).then(() => { pendingDoor.ready = true; }).catch(error => this.fail(error));
+  }
+  // MODERN controls (the RE remakes' alternative scheme): the arrows point where Bryan walks on
+  // screen. The camera's frame is held while a direction is held, so a camera cut never flips him.
+  bonusUnlocked() { try { return (Saves.store || globalThis.localStorage)?.getItem('night_zero_cleared') === '1'; } catch { return false; } }
+  modernInput(I) {
+    const p = this.player;
+    if (!p || I.aim || p.mode !== 'move' || this.cinematic) return I;
+    const ix = (I.right ? 1 : 0) - (I.left ? 1 : 0), iy = (I.up ? 1 : 0) - (I.back ? 1 : 0);
+    if (!ix && !iy) { this.moveBasis = null; return { ...I, left: false, right: false, up: false, back: false }; }
+    if (!this.moveBasis) {
+      const m = this.room.cameras[this.cam].cam.m, r = [m[0], m[1]], f = [-m[8], -m[9]];
+      const lr = Math.hypot(...r) || 1, lf = Math.hypot(...f) || 1;
+      this.moveBasis = { r: [r[0] / lr, r[1] / lr], f: [f[0] / lf, f[1] / lf] };
+    }
+    const B = this.moveBasis, dx = B.r[0] * ix + B.f[0] * iy, dy = B.r[1] * ix + B.f[1] * iy;
+    const d = angDiff(Math.atan2(dx, -dy) / D2R, p.yaw);
+    p.yaw += Math.sign(d) * Math.min(Math.abs(d), 720 * DT);          // swing round fast, then walk
+    return { ...I, left: false, right: false, back: false, up: Math.abs(d) < 75, backPressed: false, downPressed: false };
   }
   updateCamera() {
     const p = this.player;
@@ -622,6 +644,13 @@ export class Game {
     if (fx.card && (fx.card.t += DT) > fx.card.dur) fx.card = null;
     switch (this.mode) {
       case 'title': return this.updateTitle(I);
+      case 'difficulty': {
+        if (I.upPressed || I.downPressed) { this.diffSel = (this.diffSel + (I.upPressed ? 2 : 1)) % 3; this.sfx('cursor'); }
+        if ((I.leftPressed || I.rightPressed) && this.bonusUnlocked()) { this.infiniteAmmo = !this.infiniteAmmo; this.sfx('cursor'); }
+        if (I.cancelPressed) { this.mode = 'title'; this.sel = 0; return; }
+        if (I.confirmPressed && this.t > 0.15) { this.sfx('confirm'); this.pendingDifficulty = Object.keys(DIFFICULTY)[this.diffSel]; this.mode = 'intro'; this.t = 0; this.introPage = 0; this.introReveal = false; }
+        return;
+      }
       case 'intro':
         if (I.confirmPressed && this.t > 0.15) {
           if (!this.introReveal && this.t * 40 < this.ui.introLength()) this.introReveal = true;
@@ -664,7 +693,7 @@ export class Game {
       this.sfx('confirm');
       if (opts[this.sel] === 'CONTINUE') { this.loadFrom('checkpoint').catch(error => this.fail(error)); }
       else if (opts[this.sel] === 'LOAD GAME' && has) { this.mode = 'load'; this.sel = 0; this.slotBack = 'title'; }
-      else { this.mode = 'intro'; this.t = 0; this.introPage = 0; this.introReveal = false; }
+      else { this.mode = 'difficulty'; this.diffSel = 1; this.t = 0; }
     }
   }
   updateSlots(I) {
@@ -681,11 +710,14 @@ export class Game {
       if(this.cinematic)for(const e of this.enemies)if(e.def.clips==='bench')e.anim.update(DT);
       return;
     }                            // messages / menu / files pause the world
+    if (this.modernControls) I = this.modernInput(I);
     if (this.fx.card) I = { ...I, confirmPressed: false, actionPressed: false, menuPressed: false, mapPressed: false };   // a chapter card is up: look, don't touch
     if (!this.cinematic && p.mode !== 'dead' && p.mode !== 'grabbed') {
       if (I.menuPressed) return this.ui.openMenu('items');
       if (I.mapPressed) return this.ui.openMenu('map');
     }
+    const D = diffOf(S);
+    if (D.regen && p.mode !== 'dead' && S.hp < D.regen && S.time - (p.lastHurt ?? -99) > 5) S.hp = Math.min(D.regen, S.hp + 1.2 * DT);
     if (S.infect_rate && p.mode !== 'dead') S.infection = Math.min(100, (S.infection || 0) + S.infect_rate * DT);
     if (!this.cinematic && p.mode === 'move' && I.cyclePressed) this.cycleInteraction();
     this.room.blocks = (this.location.nowalk || []).filter(n => n.room === S.room && check(n.when, this)).map(n => n.rect);   // location "nowalk": [{room, rect, when}]
@@ -723,6 +755,7 @@ export class Game {
     switch (this.mode) {
       case 'title': U.drawTitle(this.sel, Saves.any()); break;
       case 'intro': U.drawIntro(this.t); break;
+      case 'difficulty': U.drawDifficulty(this.diffSel); break;
       case 'error': fb.fill(0, 0, 0); U.center('Unable to load this scene.', 90); U.center('Reload the page to retry.', 112); break;
       case 'loading': fb.fill(0, 0, 0); if (this.time % 1 < 0.5) U.center('NOW LOADING', 112, [140, 140, 140]); break;
       case 'door': this.drawDoor(); break;
@@ -783,7 +816,7 @@ export class Game {
     for (const s of C.sprites) {
       const fall=this.fx.spriteFalls?.[s.pickup];
       if(s.img && fall && fall.t<1.5)PSX.fallingSprite(fb,s.img,s.x,s.y,fall.t);
-      else if(s.img && !S.taken[s.pickup])PSX.blitSprite(fb,s.img,s.x,s.y);
+      else if(s.img && !S.taken[s.pickup])PSX.blitSprite(fb,fb.scale>1&&s.imgHD?s.imgHD:s.img,s.x,s.y);
     }
     const boost = this.muzzle ? 0.5 : 0;
     const inst = this.player.hidden ? [] : [this.player.instance(this.cam, boost)];

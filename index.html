@@ -45,14 +45,15 @@
   <div class="eyebrow">NIGHT ZERO</div>
   <h1 id="settings-title">Take a breath.</h1>
   <p class="muted">The game is paused.</p>
+  <label>Controls <select id="controls"><option value="classic">Classic · tank (turn and walk)</option><option value="modern">Modern · move where you point</option></select></label>
   <label>Rendering <select id="quality"><option value="2">Enhanced · 640 × 480</option><option value="1">Classic · 320 × 240</option></select></label>
   <label>Brightness <input id="brightness" type="range" min="0.8" max="1.6" value="1.12" step="0.02" aria-label="Brightness"></label>
   <label>Interaction hints <input id="hints" type="checkbox" checked></label>
   <label>CRT scanlines <input id="scanlines" type="checkbox"></label>
   <label>Reduce flashes and shake <input id="reduce-motion" type="checkbox"></label>
   <details><summary class="muted">Controls &amp; saving</summary>
-  <p class="muted"><kbd>↑ ↓</kbd> move · <kbd>← →</kbd> turn · <kbd>Shift</kbd> run<br><kbd>↓ + Shift</kbd> quick turn · <kbd>Z / Q</kbd> aim · <kbd>X / Space</kbd> fire<br><kbd>E / Enter</kbd> interact · <kbd>V</kbd> cycle nearby actions<br><kbd>R</kbd> reload · <kbd>Tab</kbd> inventory · <kbd>M</kbd> map<br>Controller: left stick / D-pad move, B run, triggers aim, A fire / interact, X cycle, Y inventory / aimed reload.</p>
-  <p class="muted">A checkpoint is saved at the start of each chapter. Typewriters save your exact progress using ink ribbons. Saves stay in this browser.</p></details>
+  <p class="muted"><kbd>↑ ↓</kbd> move · <kbd>← →</kbd> turn · <kbd>Shift</kbd> run<br><kbd>↓ + Shift</kbd> quick turn · <kbd>Z / Q</kbd> aim · <kbd>X / Space</kbd> fire<br><kbd>E / Enter</kbd> interact · <kbd>V</kbd> cycle nearby actions<br><kbd>R</kbd> reload · <kbd>Tab</kbd> inventory · <kbd>M</kbd> map<br><b>Modern</b> controls: the arrows point where Bryan walks on screen; he keeps going the same way through a camera cut while you hold the direction.<br>Controller: left stick / D-pad move, B run, triggers aim, A fire / interact, X cycle, Y inventory / aimed reload.</p>
+  <p class="muted">A checkpoint is saved at the start of each chapter. Typewriters save your exact progress using ink ribbons (not needed on ASSISTED). Saves stay in this browser.</p></details>
   <div class="actions"><button id="resume">Resume</button><button id="fullscreen">Fullscreen</button></div>
 </dialog>
 <script type="module" src="engine/main.js"></script>

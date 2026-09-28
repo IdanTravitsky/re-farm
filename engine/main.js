@@ -8,7 +8,7 @@ import { context } from './audio.js';
 
 const $ = id => document.getElementById(id);
 const canvas = $('screen'), ctx = canvas.getContext('2d', { alpha: false });
-let settings = { quality: 2, brightness: 1.12, hints: true, scanlines: false, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches };
+let settings = { controls: 'classic', quality: 2, brightness: 1.12, hints: true, scanlines: false, reducedMotion: matchMedia('(prefers-reduced-motion: reduce)').matches };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('night_zero_settings') || '{}')); } catch {}
 settings.quality = settings.quality === 1 ? 1 : 2;
 settings.brightness = Math.max(.8, Math.min(1.6, Number(settings.brightness) || 1.12));
@@ -17,14 +17,14 @@ const dialog = $('settings');
 function applySettings() {
   if (game && game.fb.scale !== settings.quality) game.fb = new Frame(320,240,settings.quality);
   if (game) {
-    game.hints = !!settings.hints; game.reducedMotion = !!settings.reducedMotion;
+    game.hints = !!settings.hints; game.reducedMotion = !!settings.reducedMotion; game.modernControls = settings.controls === 'modern';
     canvas.width = game.fb.w; canvas.height = game.fb.h;
     img = ctx.createImageData(game.fb.w,game.fb.h);
   }
   canvas.classList.toggle('enhanced',settings.quality === 2);
   canvas.style.filter = `brightness(${settings.brightness})`;
   $('scan').hidden = !settings.scanlines;
-  $('quality').value = String(settings.quality); $('brightness').value = settings.brightness;
+  $('controls').value = settings.controls === 'modern' ? 'modern' : 'classic'; $('quality').value = String(settings.quality); $('brightness').value = settings.brightness;
   $('hints').checked = settings.hints; $('scanlines').checked = settings.scanlines; $('reduce-motion').checked = settings.reducedMotion;
   try { localStorage.setItem('night_zero_settings',JSON.stringify(settings)); } catch {}
   if (game) { game.draw(); blit(); }
@@ -46,6 +46,7 @@ $('fullscreen').onclick = async () => {
 for (const [id,key] of [['quality','quality'],['brightness','brightness'],['hints','hints'],['scanlines','scanlines'],['reduce-motion','reducedMotion']]) {
   $(id).addEventListener('input',()=>{ settings[key]=$(id).type==='checkbox'?$(id).checked:Number($(id).value); applySettings(); });
 }
+$('controls').addEventListener('input',()=>{ settings.controls=$('controls').value; applySettings(); });
 addEventListener('keydown',e=>{
   if(e.code==='KeyP' && !e.repeat) { e.preventDefault(); e.stopImmediatePropagation(); dialog.open?resume():pause(); }
   if(e.altKey && e.code==='KeyS') { e.preventDefault(); settings.scanlines=!settings.scanlines; applySettings(); }

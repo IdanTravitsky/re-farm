@@ -361,8 +361,8 @@ export function partPoint(inst, partName, local) {
 
 // ---------------------------------------------------------------- 2D helpers
 export function blitSprite(fb, spr, x0, y0) {           // spr: {w,h,px(RGBA)}; alpha test
-  const W = fb.w, H = fb.h, p = fb.px, s = spr.px, scale = fb.scale;
-  x0 = Math.round(x0 * scale); y0 = Math.round(y0 * scale);
+  const W = fb.w, H = fb.h, p = fb.px, s = spr.px, scale = spr.hd ? 1 : fb.scale;     // an HD sprite is already at the frame's resolution
+  x0 = Math.round(x0 * fb.scale); y0 = Math.round(y0 * fb.scale);
   for (let y = 0; y < spr.h * scale; y++) {
     const yy = y0 + y;
     if (yy < 0 || yy >= H) continue;

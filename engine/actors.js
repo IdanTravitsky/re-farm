@@ -1,3 +1,4 @@
+import { DIFFICULTY } from './state.js';
 import {applyMonsterForm,updateMonster,updateFlee} from './finale.js';
 // Actors: the player (tank controls, data-driven weapons, getting grabbed) and
 // enemies whose behaviour comes from content/actors.json:
@@ -133,7 +134,8 @@ export class Player extends Actor {
     if (this.mode === 'dead' || this.g.god || (!opts.scripted && this.invulnT > 0)) return;
     this.invulnT = opts.scripted ? 0 : 0.65;
     const S = this.S;
-    S.hp -= dmg; S.stats.damage += dmg; this.flashT = 0.25;
+    if (!opts.scripted) dmg = Math.round(dmg * (DIFFICULTY[S.difficulty]?.hurt ?? 1));   // the mode scales what enemies do, never the story
+    S.hp -= dmg; S.stats.damage += dmg; this.flashT = 0.25; this.lastHurt = S.time;
     this.g.sfx('hurt');
     this.g.blood(this.x, this.y, this.z + 1.3, 10);
     if (opts.slow) this.slowT = opts.slow;
@@ -246,7 +248,7 @@ export class Player extends Actor {
       if (w.ammo && S.has(w.ammo)) { this.reload(w); return; }
       g.sfx('dryfire'); this.cool = 0.4; g.ui.say(['Out of ammo.']); return;
     }
-    S.mag[id] = --mag; this.sync();
+    if (!S.infiniteAmmo) S.mag[id] = --mag; this.sync();      // the clear bonus: the magazine never runs down
     g.sfx(w.sfx); this.cool = w.cooldown;
     this.anim.play(w.fire, { restart: true, fade: 0.02 });
     g.muzzle = { part: w.part, muzzle: w.muzzle, t: 2 + (w.muzzle.size > 3 ? 1 : 0) };

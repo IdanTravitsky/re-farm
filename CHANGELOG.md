@@ -1,5 +1,20 @@
 # Polish changes
 
+## Round 5 (Claude, 28 Sep 2026): building on the Enhanced renderer
+
+- Every scene now has a true 640x480 Enhanced plate (202 cameras, JPEG, decoded by the browser), plus HD pickup sprites. They are cut from the raw renders the pipeline already made, so nothing needed re-rendering. Classic 320x240 is unchanged.
+- Difficulty select at New Game, after RE2 (2019):
+  - ASSISTED: 0.6x damage, health recovers to CAUTION, 1.5x ammo, typewriters need no ribbon.
+  - STANDARD: the tuned game.
+  - HARDCORE: 1.4x damage, 0.7x ammo.
+  Scripted story damage is never scaled, and pickup messages always state the real count.
+- Modern controls option (Settings): the arrows move Bryan where you point on screen; the camera frame is held while a direction is held, so camera cuts never flip him.
+- The map colours rooms RE2-style: red while items remain, blue when cleared, with a legend.
+- Eight new files, one or two per chapter, telling the outbreak's side (dispatch log, fridge note, water dept. work order, cistern log, B2 security log, Lab 4 memo, B7 notes), and Michelle's saved voicemail, which Bryan plays on the bench.
+- The city crash fire and smoke are real Cycles volumes. They were emissive boxes and stacked discs.
+- Finishing the game unlocks INFINITE AMMO on the difficulty screen.
+
+
 ## Source integration (Claude, 28 Sep 2026)
 
 - The published build is now reproducible from source. `python tools/build.py --site` compiles the content, then runs post-passes over `game/data`: the vendored North Pass tunnel (`vendor/tunnel`), the many-body Amalgam (`tools/build_amalgam.py` on the freshly built model), and body-clearance collision (`tools/rebuild_collision.py`). The collision pass always starts from the freshly compiled grids. Rebuilt data matches the previous release byte for byte, apart from the fixes below.
