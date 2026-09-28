@@ -153,9 +153,11 @@ export class Script {
       case 'wait': c.wait = v; break;
       case 'run': c.q.unshift(...(g.location.sequences?.[v] || [])); break;
       case 'if': if (!check(v, g)) return 'stop'; break;
+      case 'monster_form': g.startMonster(); break;
       case 'chapter_end': g.chapterEnd(v); return 'stop';
       case 'goto_room': g.gotoRoom(v.room, v.at, v.yaw ?? 0, v.transition || 'fade'); break;
       case 'camera': g.forcedCamera = v; if (!v) g.cam = -1, g.updateCamera(); else g.updateCamera(); break;
+      case 'fall_sprite': (g.fx.spriteFalls ||= {})[v]={t:0}; S.taken[v]=true; break;
       case 'take_pickup': [].concat(v).forEach(id => { S.taken[id] = true; }); break;          // e.g. a set piece that is no longer there
       case 'fall': [].concat(v).forEach(id => { const e = g.enemies.find(x => x.id === id); if (e) { e.state = 'fall'; e.vz = 0.5; e.scripted = null; } }); break;
       case 'fall_rect': {                                       // everything standing on a part that gives way (the span) goes with it
@@ -171,11 +173,11 @@ export class Script {
       case 'cinematic': g.cinematic = !!v; break;                // player input off, letterbox on
       case 'actor': {
         const act = v.id === 'player' ? g.player : g.enemies.find(e => e.id === v.id);
-        if (act) { act.script(v); if (v.wait && v.move_to) { c.actor = act; c.block = 'actor'; } }
+        if (act) { act.script(v); if (v.wait && (v.move_to || v.path?.length)) { c.actor = act; c.block = 'actor'; } }
         break;
       }
       case 'heal': g.player.heal(v); break;
-      case 'damage': g.player.hurt(v); break;
+      case 'damage': g.player.hurt(v, { scripted: true }); break;
       case 'movie': g.ui.playMovie(v); c.block = 'movie'; break;
       case 'fade': {
         const out = 'out' in v, secs = (out ? v.out : v.in) || 0.001;

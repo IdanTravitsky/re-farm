@@ -76,16 +76,50 @@ export function partMatrices(model, pose) {
 
 // ---------------------------------------------------------------- frame & camera
 export class Frame {
-  constructor(w = 320, h = 240) {
-    this.w = w; this.h = h;
+  constructor(w = 320, h = 240, scale = 1) {
+    this.scale = scale; this.w = w * scale; this.h = h * scale;
+    w = this.w; h = this.h;
+    this._scaled = new WeakMap(); this._depths = new WeakMap();
     this.px = new Uint8ClampedArray(w * h * 4);
+    for (let i = 3; i < this.px.length; i += 4) this.px[i] = 255;
     this.depth = null;                          // Float32Array (m) or null
   }
   fill(r, g, b) {
     const p = this.px;
     for (let i = 0; i < p.length; i += 4) { p[i] = r & 0xF8; p[i + 1] = g & 0xF8; p[i + 2] = b & 0xF8; p[i + 3] = 255; }
   }
-  blit(src) { this.px.set(src); }
+  blit(src) {
+    if (src.length === this.px.length) { this.px.set(src); return; }
+    let out = this._scaled.get(src);
+    if (!out) {
+      out = new Uint8ClampedArray(this.px.length);
+      const sw = this.w / this.scale, sh = this.h / this.scale;
+      // Bilinear colour sampling; depth is scaled separately with nearest sampling.
+      for (let y = 0; y < this.h; y++) for (let x = 0; x < this.w; x++) {
+        const sx = Math.max(0, Math.min(sw - 1, (x + .5) / this.scale - .5));
+        const sy = Math.max(0, Math.min(sh - 1, (y + .5) / this.scale - .5));
+        const ix = Math.floor(sx), iy = Math.floor(sy), fx = sx - ix, fy = sy - iy;
+        for (let c = 0; c < 4; c++) {
+          const a = src[(iy * sw + ix) * 4 + c], b = src[(iy * sw + Math.min(sw-1,ix+1)) * 4 + c];
+          const d = src[(Math.min(sh-1,iy+1) * sw + ix) * 4 + c], e = src[(Math.min(sh-1,iy+1) * sw + Math.min(sw-1,ix+1)) * 4 + c];
+          out[(y*this.w+x)*4+c] = (a*(1-fx)+b*fx)*(1-fy)+(d*(1-fx)+e*fx)*fy;
+        }
+      }
+      this._scaled.set(src, out);
+    }
+    this.px.set(out);
+  }
+  sceneDepth(src) {
+    if (!src || this.scale === 1) { this.depth = src; return; }
+    let out = this._depths.get(src);
+    if (!out) {
+      out = new Float32Array(this.w*this.h);
+      const sw = this.w / this.scale;
+      for (let y=0;y<this.h;y++) for(let x=0;x<this.w;x++) out[y*this.w+x]=src[Math.floor(y/this.scale)*sw+Math.floor(x/this.scale)];
+      this._depths.set(src,out);
+    }
+    this.depth = out;
+  }
 }
 
 export class Camera {
@@ -143,7 +177,7 @@ function drawTri(fb, x0, y0, x1, y1, x2, y2, u0, v0, u1, v1, u2, v2, c0, c1, c2,
   const e0 = ((x2 - x1) * (miny - y1) - (y2 - y1) * (minx - x1)) * sgn;
   const e1 = ((x0 - x2) * (miny - y2) - (y0 - y2) * (minx - x2)) * sgn;
   const e2 = ((x1 - x0) * (miny - y0) - (y1 - y0) * (minx - x0)) * sgn;
-  const px = fb.px, dep = fb.depth;
+  const px = fb.px, dep = fb.depth, zbuf = fb.zbuf;
   const tr = tint[0], tg = tint[1], tb = tint[2];
   let r0 = e0, r1 = e1, r2 = e2;
   for (let y = miny; y <= maxy; y++) {
@@ -153,22 +187,26 @@ function drawTri(fb, x0, y0, x1, y1, x2, y2, u0, v0, u1, v1, u2, v2, c0, c1, c2,
       if ((w0 | w1 | w2) >= 0) {
         const b0 = w0 * inv, b1 = w1 * inv, b2 = w2 * inv;
         const idx = y * W + x;
-        if (!dep || b0 * z0 + b1 * z1 + b2 * z2 < dep[idx] + 0.02) {
-          // affine: straight screen-space interpolation of UVs, floored to the texel
-          let u = (b0 * u0 + b1 * u1 + b2 * u2) | 0, v = (b0 * v0 + b1 * v1 + b2 * v2) | 0;
+        const iz = b0 / z0 + b1 / z1 + b2 / z2, z = 1 / iz;
+        if ((!dep || z < dep[idx] + 0.02) && (!zbuf || z <= zbuf[idx] + 0.0001)) {
+          // Enhanced mode fixes affine texture warping; classic retains its PS1 look.
+          const perspective = fb.scale > 1;
+          let u = (perspective ? (b0*u0/z0+b1*u1/z1+b2*u2/z2)/iz : b0*u0+b1*u1+b2*u2) | 0;
+          let v = (perspective ? (b0*v0/z0+b1*v1/z1+b2*v2/z2)/iz : b0*v0+b1*v1+b2*v2) | 0;
           if (u < 0) u = 0; else if (u >= texW) u = texW - 1;
           if (v < 0) v = 0; else if (v >= texH) v = texH - 1;
           const ci = tex[v * texW + u] * 3;
           const tr8 = clut[ci], tg8 = clut[ci + 1], tb8 = clut[ci + 2];
           if (tr8 + tg8 + tb8 > 0) {                          // 0x0000 = transparent
-            const d = DITHER[drow + (x & 3)];
+            if (zbuf) zbuf[idx] = z;
+            const d = fb.scale > 1 ? 0 : DITHER[drow + (x & 3)];
             let r = (tr8 * (b0 * c0[0] + b1 * c1[0] + b2 * c2[0]) * tr) / 128 + d;
             let g = (tg8 * (b0 * c0[1] + b1 * c1[1] + b2 * c2[1]) * tg) / 128 + d;
             let b = (tb8 * (b0 * c0[2] + b1 * c1[2] + b2 * c2[2]) * tb) / 128 + d;
             const o = idx * 4;
-            px[o] = (r > 255 ? 255 : r < 0 ? 0 : r) & 0xF8;
-            px[o + 1] = (g > 255 ? 255 : g < 0 ? 0 : g) & 0xF8;
-            px[o + 2] = (b > 255 ? 255 : b < 0 ? 0 : b) & 0xF8;
+            px[o] = (r > 255 ? 255 : r < 0 ? 0 : r) & (fb.scale > 1 ? 0xFF : 0xF8);
+            px[o + 1] = (g > 255 ? 255 : g < 0 ? 0 : g) & (fb.scale > 1 ? 0xFF : 0xF8);
+            px[o + 2] = (b > 255 ? 255 : b < 0 ? 0 : b) & (fb.scale > 1 ? 0xFF : 0xF8);
           }
         }
       }
@@ -180,6 +218,9 @@ function drawTri(fb, x0, y0, x1, y1, x2, y2, u0, v0, u1, v1, u2, v2, c0, c1, c2,
 
 // instances: [{model, x, y, z, yaw(deg), pose, hide:Set, lights, scale, tint:[r,g,b]}]
 export function render(fb, cam, instances, lights, otBits = 12) {
+  fb.zbuf ||= new Float32Array(fb.w * fb.h);
+  fb.zbuf.fill(Infinity);
+  const focal = cam.f * fb.scale;
   const OT = 1 << otBits;
   const ot = new Array(OT);
   const W = fb.w, H = fb.h, hx = W >> 1, hy = H >> 1;
@@ -207,8 +248,8 @@ export function render(fb, cam, instances, lights, otBits = 12) {
         const Y = Math.floor((R[3] * vx + R[4] * vy + R[5] * vz) / 4096) + T[1];
         const Zc = Math.floor((R[6] * vx + R[7] * vy + R[8] * vz) / 4096) + T[2];
         const zs = Zc > 1 ? Zc : 1;
-        sx[i] = hx + Math.floor(cam.f * X / zs);                 // integer divide -> snapped vertices
-        sy[i] = hy + Math.floor(cam.f * Y / zs);
+        sx[i] = hx + Math.floor(focal * X / zs);                 // integer divide -> snapped vertices
+        sy[i] = hy + Math.floor(focal * Y / zs);
         Z[i] = Zc; zm[i] = Zc / 1000;
       }
       // lighting in world space
@@ -297,9 +338,12 @@ export function paintLamps(fb, C, lamps) {
       }
       // light what is there by its brightness (not per channel: that would blow the plate's
       // colour noise up into confetti), in the lamp's colour, plus a little glow
-      const o = i * 4, lum = (px[o] * 0.3 + px[o + 1] * 0.55 + px[o + 2] * 0.15) * 2.6 * k + (spot ? 22 : 40) * k;     // beams: less flat glow, or dark asphalt turns brown
+      const scale = fb.scale || 1;
+      for (let sy=0;sy<scale;sy++) for(let sx=0;sx<scale;sx++) {
+      const o = ((Math.floor(i / 320) * scale + sy) * fb.w + (i % 320) * scale + sx) * 4, lum = (px[o] * 0.3 + px[o + 1] * 0.55 + px[o + 2] * 0.15) * 2.6 * k + (spot ? 22 : 40) * k;     // beams: less flat glow, or dark asphalt turns brown
       const r = px[o] * (1 + 0.4 * k) + lum * cr, g = px[o + 1] * (1 + 0.4 * k) + lum * cg, b = px[o + 2] * (1 + 0.4 * k) + lum * cb;
       px[o] = (r > 255 ? 255 : r) & 0xF8; px[o + 1] = (g > 255 ? 255 : g) & 0xF8; px[o + 2] = (b > 255 ? 255 : b) & 0xF8;
+      }
     }
   }
 }
@@ -317,14 +361,15 @@ export function partPoint(inst, partName, local) {
 
 // ---------------------------------------------------------------- 2D helpers
 export function blitSprite(fb, spr, x0, y0) {           // spr: {w,h,px(RGBA)}; alpha test
-  const W = fb.w, H = fb.h, p = fb.px, s = spr.px;
-  for (let y = 0; y < spr.h; y++) {
+  const W = fb.w, H = fb.h, p = fb.px, s = spr.px, scale = fb.scale;
+  x0 = Math.round(x0 * scale); y0 = Math.round(y0 * scale);
+  for (let y = 0; y < spr.h * scale; y++) {
     const yy = y0 + y;
     if (yy < 0 || yy >= H) continue;
-    for (let x = 0; x < spr.w; x++) {
+    for (let x = 0; x < spr.w * scale; x++) {
       const xx = x0 + x;
       if (xx < 0 || xx >= W) continue;
-      const si = (y * spr.w + x) * 4;
+      const si = (Math.floor(y / scale) * spr.w + Math.floor(x / scale)) * 4;
       if (s[si + 3] < 128) continue;
       const di = (yy * W + xx) * 4;
       p[di] = s[si]; p[di + 1] = s[si + 1]; p[di + 2] = s[si + 2];
@@ -334,6 +379,8 @@ export function blitSprite(fb, spr, x0, y0) {           // spr: {w,h,px(RGBA)}; 
 
 export function rect(fb, x0, y0, w, h, r, g, b, a = 1) {
   const W = fb.w, H = fb.h, p = fb.px;
+  x0 = Math.round(x0 * fb.scale); y0 = Math.round(y0 * fb.scale);
+  w = Math.round(w * fb.scale); h = Math.round(h * fb.scale);
   for (let y = Math.max(0, y0); y < Math.min(H, y0 + h); y++) {
     for (let x = Math.max(0, x0); x < Math.min(W, x0 + w); x++) {
       const i = (y * W + x) * 4;
@@ -371,6 +418,7 @@ export class Font {
   }
   _draw(fb, str, x0, y0, color, scale) {
     const { cw, ch, widths } = this.meta;
+    x0 = Math.round(x0 * fb.scale); y0 = Math.round(y0 * fb.scale); scale *= fb.scale;
     let x = x0;
     for (const c of str) {
       const k = c.charCodeAt(0) - 32;
@@ -387,5 +435,22 @@ export class Font {
       }
       x += ((widths[k] || 5) + 1) * scale;
     }
+  }
+}
+
+// Affine plate animation for a detached set piece. Inverse sampling leaves no
+// holes as the span rotates and accelerates downwards in either resolution.
+export function fallingSprite(fb,spr,x,y,t) {
+  const angle=t*t*.65,c=Math.cos(angle),s=Math.sin(angle),scale=fb.scale;
+  const cx=x+spr.w/2,cy=y+spr.h/2+170*t*t;
+  const radius=Math.hypot(spr.w,spr.h)/2;
+  const x0=Math.max(0,Math.floor((cx-radius)*scale)),x1=Math.min(fb.w,Math.ceil((cx+radius)*scale));
+  const y0=Math.max(0,Math.floor((cy-radius)*scale)),y1=Math.min(fb.h,Math.ceil((cy+radius)*scale));
+  for(let yy=y0;yy<y1;yy++)for(let xx=x0;xx<x1;xx++){
+    const dx=(xx+.5)/scale-cx,dy=(yy+.5)/scale-cy;
+    const sx=Math.floor(c*dx+s*dy+spr.w/2),sy=Math.floor(-s*dx+c*dy+spr.h/2);
+    if(sx<0||sy<0||sx>=spr.w||sy>=spr.h)continue;
+    const si=(sy*spr.w+sx)*4;if(spr.px[si+3]<128)continue;
+    const di=(yy*fb.w+xx)*4;fb.px[di]=spr.px[si];fb.px[di+1]=spr.px[si+1];fb.px[di+2]=spr.px[si+2];
   }
 }

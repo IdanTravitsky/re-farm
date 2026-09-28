@@ -1,30 +1,31 @@
 // All screens and overlays. Drawing is skipped entirely when running headless.
 import * as PSX from './psx.js';
 import { Saves } from './state.js';
+import { wrapText, paginate, fitText } from './text.js';
 
 const D2R = Math.PI / 180;
 const WHITE = [240, 240, 232], GOLD = [255, 220, 90], GREY = [150, 146, 138], RED = [200, 16, 16];
 
 export class UI {
-  constructor(g) { this.g = g; this.msg = null; this.file = null; this.menu = null; this.movie = null; this.icons = null; this.boxUI = null; }
+  constructor(g) { this.g = g; this.msg = null; this.messageQueue = []; this.file = null; this.menu = null; this.movie = null; this.icons = null; this.boxUI = null; }
   get F() { return this.g.A.font; }
   get fb() { return this.g.fb; }
   get items() { return this.g.A.content.items; }
 
   // ---------------------------------------------------------------- messages
-  // a page holds 3 wrapped lines (2 when YES/NO sits under it); longer text flows onto more pages
-  paginate(text, max = 3) {
-    const L = this.wrap(text, 290), out = [];
-    for (let i = 0; i < L.length; i += max) out.push(L.slice(i, i + max).join(' '));
-    return out.length ? out : [''];
+  messagePages(lines, rows = 3) {
+    return [].concat(lines).flatMap(text => paginate(this.wrap(text, 288), rows).map(p => p.join('\n')));
   }
-  say(lines, then, who) { this.msg = { lines: [].concat(lines).flatMap(l => this.paginate(l)), shown: 0, page: 0, then, who }; }
-  ask(q, yes, no) {
-    const pages = this.paginate(q, 2);
-    if (pages.length > 1) return this.say(pages.slice(0, -1), () => this.ask(pages[pages.length - 1], yes, no));
-    this.msg = { lines: pages, shown: 0, page: 0, choice: 0, yes, no };
+  enqueueMessage(msg) { if (this.msg) this.messageQueue.push(msg); else this.msg = msg; }
+  finishMessage(callback) {
+    this.msg = null;
+    callback?.();
+    if (!this.msg) this.msg = this.messageQueue.shift() || null;
   }
-  readFile(id, page = 0) { this.file = { id, page }; }
+  say(lines, then, who) { this.enqueueMessage({ lines: this.messagePages(lines), shown: 0, page: 0, then, who }); }
+  ask(q, yes, no) { this.enqueueMessage({ lines: this.messagePages(q, 2), shown: 0, page: 0, choice: 0, yes, no }); }
+  filePages(id) { return this.g.A.content.files[id].pages.flatMap(p => paginate(p.flatMap(l => this.wrap(l, 232)), 9)); }
+  readFile(id, page = 0) { this.file = { id, page, pages: this.filePages(id) }; }
   modal() { return !!(this.msg || this.file || this.menu || this.movie || this.boxUI); }
 
   update(I) {
@@ -40,20 +41,20 @@ export class UI {
     const m = this.msg;
     m.shown += 90 / 30;
     const full = m.lines[m.page].length;
-    if (m.choice !== undefined && m.shown >= full) {
+    if (m.choice !== undefined && m.page === m.lines.length - 1 && m.shown >= full) {
       if (I.leftPressed || I.rightPressed) { m.choice ^= 1; this.g.sfx('cursor'); }
-      if (I.confirmPressed) { this.msg = null; if (m.choice === 0) m.yes && m.yes(); else { this.g.sfx('cursor'); m.no && m.no(); } }
-      else if (I.cancelPressed) { this.msg = null; m.no && m.no(); }
+      if (I.confirmPressed) { if (m.choice !== 0) this.g.sfx('cursor'); this.finishMessage(m.choice === 0 ? m.yes : m.no); }
+      else if (I.cancelPressed) this.finishMessage(m.no);
       return;
     }
     if (I.confirmPressed || I.cancelPressed) {
       if (m.shown < full) m.shown = full;
       else if (m.page < m.lines.length - 1) { m.page++; m.shown = 0; }
-      else { this.msg = null; m.then && m.then(); }
+      else this.finishMessage(m.then);
     }
   }
   updateFile(I) {
-    const f = this.file, pages = this.g.A.content.files[f.id].pages;
+    const f = this.file, pages = f.pages || this.filePages(f.id);
     if (I.rightPressed && f.page < pages.length - 1) { f.page++; this.g.sfx('cursor'); }
     if (I.leftPressed && f.page > 0) { f.page--; this.g.sfx('cursor'); }
     if (I.confirmPressed) { if (f.page < pages.length - 1) { f.page++; this.g.sfx('cursor'); } else this.file = null; }
@@ -74,7 +75,7 @@ export class UI {
     if (!M.sub && (I.prevTabPressed || I.nextTabPressed)) {
       M.tab = tabs[(tabs.indexOf(M.tab) + (I.nextTabPressed ? 1 : 2)) % 3]; g.sfx('cursor'); return;
     }
-    if (I.cancelPressed || (I.menuPressed && !M.sub)) { if (M.sub) M.sub = null; else this.menu = null; return; }
+    if (I.cancelPressed || (I.menuPressed && !M.sub)) { if (M.sub) M.sub = null; else if (M.combine != null) M.combine = null; else this.menu = null; return; }
     if (M.tab === 'map') {
       if (I.confirmPressed) { M.journey = !M.journey; g.sfx('cursor'); }
       const nodes = g.A.content.journey.nodes;
@@ -152,6 +153,10 @@ export class UI {
     }
     const r = this.recipes().find(r => (r[0] === A.id && r[1] === B.id) || (r[0] === B.id && r[1] === A.id));
     if (!r) { g.sfx('locked'); return this.say(["They can't be combined."]); }
+    if (a === b && A.n < 2) return this.say(['You need two of that item.']);
+    const resultStack = S.inventory.find(i => i.id === r[2]);
+    const freed = a === b ? (A.n === 2 ? 1 : 0) : (A.n === 1 ? 1 : 0) + (B.n === 1 ? 1 : 0);
+    if (!resultStack && S.inventory.length - freed >= g.slots) return this.say(['Make room for the combined item first.']);
     const ida = A.id, idb = B.id;
     S.consume(ida, 1); S.consume(idb, 1);
     const at = Math.min(a, b, S.inventory.length);
@@ -204,7 +209,7 @@ export class UI {
       this.box(x, y, 68, 42, [0, 0, 0], 0.9, B.side === 0 && k === B.isel ? GOLD : [110, 110, 104]);
       const it = S.inventory[k];
       if (!it) continue;
-      PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
+      PSX.blitSprite(fb, this.icon(it.id), x + 2, y + 2);
       const def = this.items[it.id];
       if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
     }
@@ -212,7 +217,7 @@ export class UI {
     const top = Math.max(0, Math.min(B.bsel - 5, box.length - 12));
     box.slice(top, top + 12).forEach((b, i) => {
       const k = top + i, def = this.items[b.id], sel = B.side === 1 && k === B.bsel;
-      F.draw(fb, (sel ? '> ' : '  ') + def.name, 166, 26 + i * 14, sel ? GOLD : [210, 206, 190]);
+      F.draw(fb, this.fit((sel ? '> ' : '  ') + def.name, 120), 166, 26 + i * 14, sel ? GOLD : [210, 206, 190]);
       if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(b.n), 292, 26 + i * 14, [230, 230, 120]);
     });
     if (!box.length) F.draw(fb, '  (empty)', 166, 26, GREY);
@@ -246,12 +251,16 @@ export class UI {
     PSX.rect(fb, x, y, w, 1, ...border); PSX.rect(fb, x, y + h - 1, w, 1, ...border);
     PSX.rect(fb, x, y, 1, h, ...border); PSX.rect(fb, x + w - 1, y, 1, h, ...border);
   }
-  wrap(text, width) {
-    const words = text.split(' '), lines = [];
-    let cur = '';
-    for (const w of words) { const t = cur ? cur + ' ' + w : w; if (this.F.width(t) > width) { lines.push(cur); cur = w; } else cur = t; }
-    if (cur) lines.push(cur);
-    return lines;
+  wrap(text, width) { return wrapText(text, width, s => this.F.width(s)); }
+  fit(text, width) { return fitText(text, width, s => this.F.width(s)); }
+  narrativePages(lines, rows) { return paginate(lines.flatMap(l => this.wrap(l, 280)), rows); }
+  introPages() { return this.narrativePages(this.g.A.content.game.intro, 12); }
+  chapterPages(ch) { return this.narrativePages(ch.text, 8); }
+  introLength() { return this.introPages()[this.g.introPage || 0].reduce((n,l) => n + l.length + 8, 0); }
+  center(s, y, col = WHITE, scale = 1) {
+    if (this.F.width(s) * scale > 288 && scale > 1) scale = 1;
+    s = this.fit(s, 288 / scale);
+    this.F.draw(this.fb, s, 160 - (this.F.width(s) * scale >> 1), y, col, scale);
   }
   // wrap to the narrowest width that still needs no extra lines: even lines, no one-word orphans
   balanced(text, max) {
@@ -264,32 +273,65 @@ export class UI {
 
   drawOverlays() {
     if (this.boxUI) { this.drawBox(); if (this.msg) this.drawMsg(); return; }
-    if (this.menu) { this.drawMenu(); if (this.msg) this.drawMsg(); return; }
+    if (this.menu) { this.drawMenu(); if (this.file) this.drawFile(); if (this.msg) this.drawMsg(); return; }
     else if (this.file) this.drawFile();
     else if (this.msg) this.drawMsg();
+    else if (!this.g.cinematic) this.drawHUD();
+  }
+  drawHUD() {
+    const g = this.g, p = g.player, fb = this.fb;
+    if (!p || p.mode === 'dead' || g.fx.card || g.fx.fade > 0) return;
+    if (g.notice && g.notice.until > g.time) {
+      this.box(8, 8, 304, 30);
+      this.wrap(g.notice.text, 288).slice(0,2).forEach((s,i)=>this.F.draw(fb,s,16,12+i*12,GOLD));
+    }
+    if (p.mode === 'grabbed') { this.box(40, 208, 240, 23); this.center('TAP DIRECTION / ACTION TO ESCAPE', 214, GOLD); return; }
+    const w = p.weapon();
+    if (p.mode === 'aim' || p.mode === 'fire') {
+      this.box(8, 8, 100, 22);
+      this.F.draw(fb, `${g.state.mag[g.state.equipped] || 0} / ${g.state.count(w?.ammo)}   R: LOAD`, 14, 14, GOLD);
+      if (p.target?.hostile()) {
+        const q = g.room.cameras[g.cam].cam.project(p.target.x,p.target.y,p.target.z+p.target.chest());
+        if(q && q[0]>5 && q[0]<315 && q[1]>5 && q[1]<205) {
+          PSX.rect(fb,Math.round(q[0])-3,Math.round(q[1])-3,7,1,...GOLD);
+          PSX.rect(fb,Math.round(q[0])-3,Math.round(q[1])+3,7,1,...GOLD);
+        }
+      }
+      return;
+    }
+    if (!g.hints || p.mode !== 'move') return;
+    const c = g.nearest();
+    if (!c) return;
+    const lines = this.wrap('E / ENTER: ' + g.interactionLabel(c), 282).slice(0,2);
+    const extra = g.nearby().length > 1 ? 'V: next nearby action' : '';
+    const h = 10 + (lines.length + (extra ? 1 : 0)) * 12;
+    this.box(8, 232-h, 304, h, [5,8,10], .92, [120,135,122]);
+    lines.forEach((l,i)=>this.F.draw(fb,l,16,237-h+i*12,GOLD));
+    if(extra) this.F.draw(fb,extra,16,237-h+lines.length*12,GREY);
   }
   drawMsg() {
-    const m = this.msg, F = this.F, over = this.menu || this.boxUI, dy = over ? -8 : 0;     // over a menu: in its description strip, above the tabs
-    this.box(8, 186 + dy, 304, over ? 40 : 48, [0, 0, 0], over ? 0.97 : 0.85);
-    if (m.who) { const w = F.width(m.who) + 12; this.box(8, 172 + dy, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, m.who, 14, 175 + dy, GOLD); }
-    const lines = this.wrap(m.lines[m.page].slice(0, Math.floor(m.shown)), 290);
-    lines.slice(0, 3).forEach((l, i) => F.draw(this.fb, l, 16, 191 + dy + i * 13));
-    if (m.choice !== undefined && m.shown >= m.lines[m.page].length) {
+    const m = this.msg, F = this.F, dy = this.menu || this.boxUI ? -8 : 0;
+    this.box(8, 186 + dy, 304, 48);
+    if (m.who) { const who = this.fit(m.who, 290), w = F.width(who) + 12; this.box(8, 172 + dy, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, who, 14, 175 + dy, GOLD); }
+    const lines = m.lines[m.page].split('\n');
+    let remaining = Math.floor(m.shown);
+    lines.forEach((l, i) => { F.draw(this.fb, l.slice(0, Math.max(0, remaining)), 16, 191 + dy + i * 13); remaining -= l.length + 1; });
+    if (m.choice !== undefined && m.page === m.lines.length - 1 && m.shown >= m.lines[m.page].length) {
       F.draw(this.fb, 'YES', 110, 218 + dy, m.choice === 0 ? [255, 230, 120] : [140, 140, 140]);
       F.draw(this.fb, 'NO', 190, 218 + dy, m.choice === 1 ? [255, 230, 120] : [140, 140, 140]);
       F.draw(this.fb, '>', m.choice === 0 ? 100 : 180, 218 + dy, [255, 230, 120]);
     }
   }
   drawFile() {
-    const fb = this.fb, F = this.F, f = this.file, doc = this.g.A.content.files[f.id], pg = doc.pages[f.page];
+    const fb = this.fb, F = this.F, f = this.file, doc = this.g.A.content.files[f.id];
+    const pages = f.pages || this.filePages(f.id), pg = pages[f.page];
     PSX.darken(fb, 0.3);
     this.box(30, 24, 260, 180, [58, 52, 40], 0.95, [120, 104, 80]);
-    F.draw(fb, doc.title, 44, 32, [230, 200, 140]);
-    F.draw(fb, pg[0], 44, 54, [220, 200, 160]);
-    const paras = pg.slice(1).join('\n').split(/\n\s*\n/).map(t => t.replace(/\s+/g, ' ').trim());   // hand-broken lines reflow; a blank line is a break
-    const body = paras.flatMap((t, i) => [...(i ? [''] : []), ...(t ? this.wrap(t, 240) : [])]), step = body.length > 7 ? 13 : 16;
-    body.forEach((l, i) => F.draw(fb, l, 44, 76 + i * step, [220, 214, 196]));
-    F.draw(fb, `${f.page + 1}/${doc.pages.length}`, 250, 186, [160, 150, 130]);
+    F.draw(fb, this.fit(doc.title, 232), 44, 32, [230, 200, 140]);
+    pg.forEach((l, i) => F.draw(fb, l, 44, 54 + i * 14, i === 0 ? [220, 200, 160] : [220, 214, 196]));
+    F.draw(fb, 'LEFT / RIGHT: PAGE', 44, 186, [160, 150, 130]);
+    const label = `${f.page + 1}/${pages.length}`;
+    F.draw(fb, label, 276 - F.width(label), 186, [160, 150, 130]);
   }
   drawMenu() {
     const fb = this.fb, M = this.menu;
@@ -356,7 +398,7 @@ export class UI {
       this.box(x, y, 68, 40, [0, 0, 0], 0.9, k === M.sel ? [255, 220, 90] : [110, 110, 104]);
       const it = S.inventory[k];
       if (!it) continue;
-      PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
+      PSX.blitSprite(fb, this.icon(it.id), x + 2, y + 2);
       const def = this.items[it.id];
       if (def.kind !== 'file' && def.kind !== 'key' && def.kind !== 'tool') F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
       if (M.combine === k) this.box(x + 1, y + 1, 66, 38, [0, 0, 0], 0, [120, 220, 255]);
@@ -462,10 +504,10 @@ export class UI {
     if (!this.icons) this.icons = {};
     if (!this.icons[id]) {
       const def = this.items[id], m = this.g.A.models[def.model];
-      const fb = new PSX.Frame(64, 44);
-      for (let y = 0; y < 44; y++) PSX.rect(fb, 0, y, 64, 1, 10 + y / 3, 12 + y / 3, 24 + y / 2);   // dim backdrop, like the originals
+      const fb = new PSX.Frame(64, 38);
+      for (let y = 0; y < 38; y++) PSX.rect(fb, 0, y, 64, 1, 10 + y / 3, 12 + y / 3, 24 + y / 2);   // dim backdrop, like the originals
       const gun = !!def.weapon;
-      PSX.render(fb, framed(m, 64, 44, gun ? -90 : -30, gun ? 1.05 : 1.0, gun ? 0.15 : 0.45), [{ model: m, x: 0, y: 0, z: 0, yaw: 0, pose: {} }],
+      PSX.render(fb, framed(m, 64, 38, gun ? -90 : -30, gun ? 1.05 : 1.0, gun ? 0.15 : 0.45), [{ model: m, x: 0, y: 0, z: 0, yaw: 0, pose: {} }],
         gun ? new PSX.Lights([[0.3, 0.5, -0.8], [-0.6, -0.2, -0.4]], [[1.3, 1.25, 1.15], [0.55, 0.58, 0.7]], [0.9, 0.9, 0.95])   // dark gunmetal needs more light
           : new PSX.Lights([[0.5, 0.7, -0.6], [-0.6, -0.2, -0.2]], [[0.9, 0.88, 0.8], [0.3, 0.32, 0.4]], [0.45, 0.45, 0.48]));
       for (let i = 3; i < fb.px.length; i += 4) fb.px[i] = 255;       // opaque: the rasteriser never writes alpha, and blitSprite alpha-tests
@@ -483,24 +525,24 @@ export class UI {
     this.center(T.title, 50, [Math.floor(200 * flick), 10, 10], 2);
     this.center(T.subtitle, 84, [210, 200, 180]);
     this.center(T.tagline, 100, [130, 124, 116]);
-    const opts = ['NEW GAME', 'LOAD GAME'];
+    const opts = g.titleOptions();
     opts.forEach((o, i) => {
-      const dis = i === 1 && !hasSaves;
+      const dis = false;
       this.center((i === sel ? '> ' : '  ') + o + (i === sel ? ' <' : '  '), 136 + i * 16, dis ? [90, 90, 90] : i === sel ? GOLD : WHITE);
     });
-    ['ARROWS: move    SHIFT: run    DOWN+SHIFT: 180', 'Z: aim    X: fire    ENTER: action', 'TAB: status    M: map    ESC: back']
+    ['ARROWS: move    SHIFT: run    DOWN+SHIFT: 180', 'Z: aim   X: fire   R: reload   E: action', 'TAB: status   M: map   P: pause / settings']
       .forEach((l, i) => this.center(l, 188 + i * 13, GREY));
   }
   drawIntro(t) {
-    const fb = this.fb, lines = (this._intro ||= this.g.A.content.game.intro.flatMap(l => l ? this.wrap(l, 300) : ['']));
+    const fb = this.fb, pages = this.introPages(), page = this.g.introPage || 0, lines = pages[page];
     fb.fill(0, 0, 0);
-    const shown = Math.floor(t * 40);
+    const shown = this.g.introReveal ? Infinity : Math.floor(t * 40);
     let n = 0;
     lines.forEach((l, i) => {
       const s = l.slice(0, Math.max(0, shown - n)); n += l.length + 8;
-      this.F.draw(fb, s, 160 - (this.F.width(l) >> 1), 36 + i * 15, [200, 196, 186]);
+      this.F.draw(fb, s, 160 - (this.F.width(l) >> 1), 26 + i * 14, [200, 196, 186]);
     });
-    if (t > 3 && Math.floor(this.g.time * 2) % 2 === 0) this.center('PRESS ENTER', 214, [120, 120, 120]);
+    if (t > 0.8) this.center(shown < n ? 'ENTER: reveal text' : page < pages.length - 1 ? 'ENTER: next page' : 'PRESS ENTER', 214, [150, 150, 140]);
   }
   drawSlots(title, sel) {
     const fb = this.fb, F = this.F;
@@ -512,8 +554,8 @@ export class UI {
       this.box(44, y, 232, 36, [0, 0, 0], 0.9, i === sel ? GOLD : [100, 100, 96]);
       if (!s) { F.draw(fb, `${i + 1}.  NO DATA`, 54, y + 12, GREY); return; }
       const t = Math.floor(s.time), hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
-      F.draw(fb, `${i + 1}.  ${s.room}`, 54, y + 5, WHITE);
-      F.draw(fb, `TIME ${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}    SAVES ${s.saves}`, 72, y + 19, [190, 186, 170]);
+      F.draw(fb, this.fit(`${i + 1}.  ${s.room}`, 212), 54, y + 5, WHITE);
+      F.draw(fb, this.fit(`TIME ${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}   SAVES ${s.saves}`, 212), 54, y + 19, [190, 186, 170]);
     });
   }
   drawDead(t) {
@@ -521,32 +563,34 @@ export class UI {
     PSX.darken(fb, Math.max(0.25, 1 - t * 0.4));
     PSX.tintScreen(fb, 90, 0, 0, Math.min(0.5, t * 0.25));
     this.center('YOU DIED', 100, RED, 2);
-    if (t > 2) this.center(Saves.any() ? 'ENTER: load a save    ESC: title' : 'Press ENTER to try again', 150, [200, 200, 200]);
+    if (t > 2) this.center(Saves.readCheckpoint() ? 'ENTER: chapter checkpoint    ESC: title' : Saves.any() ? 'ENTER: load a save    ESC: title' : 'Press ENTER to try again', 150, [200, 200, 200]);
   }
   drawChapter(ch, t) {
     const fb = this.fb, S = this.g.state;
     PSX.darken(fb, Math.max(0, 1 - t / 2));
     if (t < 2) return;
-    const lines = (ch._lines ||= ch.text.join('\n').split(/\n\s*\n/).flatMap((t, i) =>   // paragraphs ('' in the text), each balanced
-      [...(i ? [''] : []), ...this.balanced(t.replace(/\s+/g, ' ').trim(), 300)]));
-    const top = Math.max(14, 30 - Math.max(0, lines.length - 6) * 7), step = lines.length > 8 ? 13 : 15;
-    lines.forEach((l, i) => this.center(l, top + i * step, [200, 196, 186]));
-    const y = top + 10 + lines.length * step;
-    const t2 = Math.floor(S.time), tm = `${Math.floor(t2 / 3600)}:${String(Math.floor(t2 / 60) % 60).padStart(2, '0')}:${String(t2 % 60).padStart(2, '0')}`;
-    if (ch.final) {                                                   // RE-style results and rank
-      this.center('THE END', y, [200, 20, 20], 2);
-      const acc = S.stats.shots ? Math.round(100 * S.stats.kills / S.stats.shots) : 0;
-      const pts = (t2 < 5400 ? 2 : t2 < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
-      const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
-      this.center(`CLEAR TIME ${tm}    SAVES ${S.saves}    KILLS ${S.stats.kills}`, y + 30, [190, 186, 170]);
-      this.center(`RANK  ${rank}`, y + 50, [255, 220, 90], 2);
-      if (t > 5) this.center('PRESS ENTER', y + 80, [120, 120, 120]);
+    const pages = this.chapterPages(ch), page = ch.page || 0;
+    pages[page].forEach((l, i) => this.center(l, 24 + i * 13, [200, 196, 186]));
+    if (page < pages.length - 1) {
+      if (t > 4) this.center(`ENTER: next page (${page + 1}/${pages.length})`, 218, GREY);
       return;
     }
-    this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', y, [200, 20, 20]);
-    this.center(`TIME ${tm}   SHOTS ${S.stats.shots}   KILLS ${S.stats.kills}   SAVES ${S.saves}`, y + 22, [170, 166, 150]);
-    if (t > 4) this.center('PRESS ENTER', y + 46, [120, 120, 120]);
+    const seconds = Math.floor(S.time), tm = `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    if (ch.final) {
+      this.center('THE END', 137, RED, 2);
+      const pts = (seconds < 5400 ? 2 : seconds < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
+      const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
+      this.center(`TIME ${tm}   SAVES ${S.saves}   KILLS ${S.stats.kills}`, 171, [190, 186, 170]);
+      this.center(`RANK  ${rank}`, 191, GOLD, 2);
+      if (t > 5) this.center('PRESS ENTER', 222, GREY);
+      return;
+    }
+    this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', 146, RED);
+    this.center(`Time ${tm}   Saves ${S.saves}`, 169, GREY);
+    this.center(`Shots ${S.stats.shots}   Kills ${S.stats.kills}`, 183, GREY);
+    if (t > 4) this.center('PRESS ENTER', 218, GREY);
   }
+
 }
 
 // frame a model by its bounding sphere (icons, item examine)

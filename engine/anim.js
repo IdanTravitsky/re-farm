@@ -185,6 +185,10 @@ export function dogClips(P) {
 export function wiggle(pose, model, t, amt = 1) {
   const out = { ...pose };
   for (const p of model.parts) {
+    if (model.name === 'amalgam' && /^mass_\d+$/.test(p.name)) {
+      const k=Number(p.name.split('_')[1]);
+      out[p.name]=k>=7 ? [Math.sin(t*4.2+k*1.7)*17,Math.cos(t*2+k)*4,0] : [Math.sin(t*1.7+k)*2.5,Math.cos(t*1.3+k)*3,Math.sin(t*1.1+k)*2];
+    }
     if (!p.name.includes('tent')) continue;
     const k = p.name.charCodeAt(p.name.length - 1) + p.name.charCodeAt(p.name.length - 3) * 7;
     const b = out[p.name] || [0, 0, 0];
@@ -244,6 +248,7 @@ export function bruteClips(P) {
     ...base,
     walk: { len: 1.9, loop: true, fn: (t) => gait(L, 0.7, { lean: 6, bob: 30, sway: 14, armSwing: 0.5, kneeLift: 0.4 })(t / 1.9) },
     run: { len: 1.0, loop: true, fn: (t) => gait(L, 1.1, { lean: 14, bob: 40, sway: 10, armSwing: 0.8 })(t / 1.0) },
+    climb: {len:1.2,loop:true,fn:t=>add(L,{upperarm_r:[-145+20*Math.sin(t*5.24),0,0],upperarm_l:[-145-20*Math.sin(t*5.24),0,0],thigh_r:[35*Math.sin(t*5.24),0,0],thigh_l:[-35*Math.sin(t*5.24),0,0],torso:[12,0,0]})},
     attack: { len: 1.4, loop: false, keys: K([[0, L], [0.5, add(L, { torso: [-20, 0, 0], upperarm_r: [-160, 20, 0], upperarm_l: [-160, -20, 0] })],
       [0.7, add(L, { torso: [35, 0, 0], upperarm_r: [-40, 0, 0], upperarm_l: [-40, 0, 0], _root: [0, -120, -60] })], [1.4, L]]) },
   };
@@ -288,6 +293,12 @@ export function grabClips(P) {
 // clip sets by name (content/actors.json "clips"), built from that model's key poses
 export const CLIPSETS = {
   bryan: (P) => bryanClips(P),
+  bench: P => ({
+    idle:{len:2.4,loop:true,fn:t=>add(P.sit,{torso:[Math.sin(t*2.6),0,0]})},
+    sit_down:{len:1.2,loop:false,keys:[[0,P.idle],[.5,add(P.idle,{torso:[25,0,0],thigh_r:[-35,0,0],thigh_l:[-35,0,0],_root:[0,0,-120]})],[1.2,P.sit]]},
+    record:{len:3,loop:true,fn:t=>add(P.sit,{head:[3*Math.sin(t*2),4*Math.sin(t),0],forearm_r:[2*Math.sin(t*2),0,0],torso:[1.5*Math.sin(t*2),0,0]})},
+    stand_up:{len:1.2,loop:false,keys:[[0,P.sit],[.5,add(P.sit,{torso:[20,0,0]})],[1.2,P.idle]]}
+  }),
   zombie: (P) => ({ ...zombieClips(P), ...grabClips(P) }),
   zombie_heavy: (P) => zombieClips(P, true),
   dog: (P) => dogClips(P),

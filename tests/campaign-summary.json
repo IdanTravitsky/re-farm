@@ -1,0 +1,50 @@
+{
+  "baseline": "831e04a90ddf07bdaa58ff6f954f7487a8d591a3",
+  "complete": true,
+  "seed": 42,
+  "method": "Continuous tank-control inputs, normal health/ammo/combat, normal pickups and transitions",
+  "frames": 25270,
+  "gameSeconds": 736.03,
+  "roomsVisited": [
+    "road_main",
+    "farm_outside",
+    "farm_barn",
+    "farm_house",
+    "farm_den",
+    "farm_upstairs",
+    "farm_bedroom",
+    "trailer_lot",
+    "trailer_in",
+    "trailer_kid",
+    "city_street",
+    "city_court",
+    "sewer_tunnel",
+    "sewer_office",
+    "sewer_cistern",
+    "hs_street",
+    "garage_deck",
+    "garage_lobby",
+    "stair_12",
+    "hosp_12",
+    "elev",
+    "hosp_24",
+    "ward_24",
+    "bridge",
+    "lab_corr",
+    "lab_airlock",
+    "lab_main"
+  ],
+  "stats": {
+    "shots": 157,
+    "kills": 42,
+    "damage": 136
+  },
+  "ending": {
+    "monsterBryan": true,
+    "workersDefeated": true,
+    "position": [
+      54.5,
+      8.8
+    ]
+  }
+}
