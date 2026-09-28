@@ -86,7 +86,7 @@ async function walkTo(target,{stop=()=>false,combat=true}={}){
   if(frame===17999)throw Error(`WALK STALLED ${g.state.room} ${[p.x,p.y]} -> ${target}`);
  }
 }
-async function act(id){
+async function act(id,attempt=0){
  await settle();const c=g.candidates().find(c=>[c.pk?.id,c.ex?.id,c.door?.id].includes(id));if(!c)throw Error('Missing action '+id+' in '+g.state.room);
  if(c.pk&&!A.content.items[c.pk.item].held&&!g.state.has(c.pk.item)&&g.state.inventory.length>=g.slots){
   // Manage the same eight slots as a player: consolidate spare rounds first,
@@ -108,7 +108,8 @@ async function act(id){
  for(let i=0;i<60;i++){const d=angDiff(yawTo(p.x,p.y,...c.at),p.yaw);if(Math.abs(d)<10)break;tick(d>0?{left:true}:{right:true});}
  for(let i=0;i<g.nearby().length;i++){if(g.interactionId(g.nearest())===g.interactionId(c))break;tick({cyclePressed:true});}
  if(!g.nearest()||g.interactionId(g.nearest())!==g.interactionId(c))throw Error('Cannot select '+id);
- tick({actionPressed:true});await settle();if(c.pk&&!g.state.taken[c.pk.id])throw Error('Pickup was not collected: '+id);await shot('action-'+id);
+ tick({actionPressed:true});await settle();if(c.pk&&!g.state.taken[c.pk.id]){if(attempt<3){await settle();return act(id,attempt+1);}throw Error('Pickup was not collected: '+id);}   // a hit mid-pickup: try again, like a player would
+await shot('action-'+id);
 }
 async function huntFinale(){
  for(let i=0;i<12000&&!g.state.flags.lab_hunt_complete;i++){

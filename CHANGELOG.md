@@ -1,5 +1,16 @@
 # Polish changes
 
+## Source integration (Claude, 28 Sep 2026)
+
+- The published build is now reproducible from source. `python tools/build.py --site` compiles the content, then runs post-passes over `game/data`: the vendored North Pass tunnel (`vendor/tunnel`), the many-body Amalgam (`tools/build_amalgam.py` on the freshly built model), and body-clearance collision (`tools/rebuild_collision.py`). The collision pass always starts from the freshly compiled grids. Rebuilt data matches the previous release byte for byte, apart from the fixes below.
+- `site/` mirrors `game/` (engine, data, tests, tools, docs). The export no longer deletes tests or tools, and the stale-file prune keeps `_body` grids and `_hd` plates.
+- `walk_floor_limit` is authored per room in `content/` and emitted by the level compiler.
+- City: the Amalgam again comes from the burning wreck (east). The previous spawn put it between Bryan and the manhole he flees to, contradicting "coming around the crash".
+- Movement: when both the straight step and the axis slides are blocked, actors glance off at up to 52 degrees instead of stopping dead. Tank controls no longer snag on table corners and narrow doorways.
+- Skybridge: the Amalgam bursts through as an intro beat, then wakes with a moment's grace, and Bryan is pushed clear of the door. It could land repeated hits on a player standing at the entrance.
+- `tests/playthrough.mjs`: pickups interrupted by a hit are retried, as a player would.
+
+
 ## Integration with upstream 831e04a
 
 - Retain the updated upstream camera coverage, lighting, actor props, poses, door/ladder transitions, combat framing, infection colouring and revised scene staging.

@@ -40,6 +40,12 @@ class Actor {
       if (openX && openY && can(this.x + dx, this.y + dy)) { this.x += dx; this.y += dy; moved ||= !!(dx || dy); }
       else if (openX && dx) { this.x += dx; moved = true; }
       else if (openY && dy) { this.y += dy; moved = true; }
+      else if (dx || dy) {                                     // snagged on a corner or a tight gap: glance off it instead of stopping dead
+        for (const a of [0.45, -0.45, 0.9, -0.9]) {
+          const c = Math.cos(a), s = Math.sin(a), nx = (dx * c - dy * s) * c, ny = (dx * s + dy * c) * c;
+          if (can(this.x + nx, this.y + ny)) { this.x += nx; this.y += ny; moved = true; break; }
+        }
+      }
     }
     this.z += (R.floor(this.x, this.y) - this.z) * 0.5;       // settle onto steps smoothly
     return moved;
