@@ -89,7 +89,7 @@ export class Frame {
     for (let i = 0; i < p.length; i += 4) { p[i] = r & 0xF8; p[i + 1] = g & 0xF8; p[i + 2] = b & 0xF8; p[i + 3] = 255; }
   }
   blit(src) {
-    if (this.scale === 1) { this.px.set(src); return; }
+    if (src.length === this.px.length) { this.px.set(src); return; }
     let out = this._scaled.get(src);
     if (!out) {
       out = new Uint8ClampedArray(this.px.length);

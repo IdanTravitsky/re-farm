@@ -19,7 +19,7 @@ test('campaign progresses from Route Six through all ten chapters to the ending'
    if(i%60===0)await new Promise(resolve=>setImmediate(resolve));
    if(g.mode==='play'&&!g.ui.modal()&&!g.script.running.length&&g.player.mode!=='pickup')return;
   }
-  throw Error(`Hung in ${g.state.room}: ${g.script.running.map(c=>c.label+':'+c.block+':'+c.wait).join(',')}`);
+  throw Error(`Hung in ${g.state.room}: ${g.script.running.map(c=>c.label+':'+c.block+':'+c.wait+':'+JSON.stringify(c.actor?.scripted)+':'+[c.actor?.x,c.actor?.y]).join(',')}`);
  }
  async function enter(room,at){
   if(!at){const R=await A.room(room);at=R.nearestWalkable(R.x0+R.nx*R.res/2,R.y0+R.ny*R.res/2,100);}
@@ -28,7 +28,7 @@ test('campaign progresses from Route Six through all ten chapters to the ending'
  async function act(id){
   const c=g.candidates().find(c=>c.pk?.id===id||c.ex?.id===id||c.door?.id===id);
   assert.ok(c,`${g.state.room}: missing action ${id}`);
-  [g.player.x,g.player.y]=g.room.nearestWalkable(...c.at);g.player.z=g.room.floor(g.player.x,g.player.y);g.player.yaw=yawTo(g.player.x,g.player.y,...c.at);
+  [g.player.x,g.player.y]=g.room.nearestWalkable(...c.at,4,g.player.r);g.player.z=g.room.floor(g.player.x,g.player.y);g.player.yaw=yawTo(g.player.x,g.player.y,...c.at);
   g.interactionKey=g.interactionId(c);assert.equal(g.interactionId(g.nearest()),g.interactionKey,`${id}: unreachable`);
   g.interact();await settle();
  }

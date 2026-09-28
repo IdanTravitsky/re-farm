@@ -1,20 +1,31 @@
 // All screens and overlays. Drawing is skipped entirely when running headless.
 import * as PSX from './psx.js';
 import { Saves } from './state.js';
+import { wrapText, paginate, fitText } from './text.js';
 
 const D2R = Math.PI / 180;
 const WHITE = [240, 240, 232], GOLD = [255, 220, 90], GREY = [150, 146, 138], RED = [200, 16, 16];
 
 export class UI {
-  constructor(g) { this.g = g; this.msg = null; this.file = null; this.menu = null; this.movie = null; this.icons = null; this.boxUI = null; }
+  constructor(g) { this.g = g; this.msg = null; this.messageQueue = []; this.file = null; this.menu = null; this.movie = null; this.icons = null; this.boxUI = null; }
   get F() { return this.g.A.font; }
   get fb() { return this.g.fb; }
   get items() { return this.g.A.content.items; }
 
   // ---------------------------------------------------------------- messages
-  say(lines, then, who) { this.msg = { lines: [].concat(lines), shown: 0, page: 0, then, who }; }
-  ask(q, yes, no) { this.msg = { lines: [q], shown: 0, page: 0, choice: 0, yes, no }; }
-  readFile(id, page = 0) { this.file = { id, page }; }
+  messagePages(lines, rows = 3) {
+    return [].concat(lines).flatMap(text => paginate(this.wrap(text, 288), rows).map(p => p.join('\n')));
+  }
+  enqueueMessage(msg) { if (this.msg) this.messageQueue.push(msg); else this.msg = msg; }
+  finishMessage(callback) {
+    this.msg = null;
+    callback?.();
+    if (!this.msg) this.msg = this.messageQueue.shift() || null;
+  }
+  say(lines, then, who) { this.enqueueMessage({ lines: this.messagePages(lines), shown: 0, page: 0, then, who }); }
+  ask(q, yes, no) { this.enqueueMessage({ lines: this.messagePages(q, 2), shown: 0, page: 0, choice: 0, yes, no }); }
+  filePages(id) { return this.g.A.content.files[id].pages.flatMap(p => paginate(p.flatMap(l => this.wrap(l, 232)), 9)); }
+  readFile(id, page = 0) { this.file = { id, page, pages: this.filePages(id) }; }
   modal() { return !!(this.msg || this.file || this.menu || this.movie || this.boxUI); }
 
   update(I) {
@@ -30,20 +41,20 @@ export class UI {
     const m = this.msg;
     m.shown += 90 / 30;
     const full = m.lines[m.page].length;
-    if (m.choice !== undefined && m.shown >= full) {
+    if (m.choice !== undefined && m.page === m.lines.length - 1 && m.shown >= full) {
       if (I.leftPressed || I.rightPressed) { m.choice ^= 1; this.g.sfx('cursor'); }
-      if (I.confirmPressed) { this.msg = null; if (m.choice === 0) m.yes && m.yes(); else { this.g.sfx('cursor'); m.no && m.no(); } }
-      else if (I.cancelPressed) { this.msg = null; m.no && m.no(); }
+      if (I.confirmPressed) { if (m.choice !== 0) this.g.sfx('cursor'); this.finishMessage(m.choice === 0 ? m.yes : m.no); }
+      else if (I.cancelPressed) this.finishMessage(m.no);
       return;
     }
     if (I.confirmPressed || I.cancelPressed) {
       if (m.shown < full) m.shown = full;
       else if (m.page < m.lines.length - 1) { m.page++; m.shown = 0; }
-      else { this.msg = null; m.then && m.then(); }
+      else this.finishMessage(m.then);
     }
   }
   updateFile(I) {
-    const f = this.file, pages = this.g.A.content.files[f.id].pages;
+    const f = this.file, pages = f.pages || this.filePages(f.id);
     if (I.rightPressed && f.page < pages.length - 1) { f.page++; this.g.sfx('cursor'); }
     if (I.leftPressed && f.page > 0) { f.page--; this.g.sfx('cursor'); }
     if (I.confirmPressed) { if (f.page < pages.length - 1) { f.page++; this.g.sfx('cursor'); } else this.file = null; }
@@ -202,7 +213,7 @@ export class UI {
     const top = Math.max(0, Math.min(B.bsel - 5, box.length - 12));
     box.slice(top, top + 12).forEach((b, i) => {
       const k = top + i, def = this.items[b.id], sel = B.side === 1 && k === B.bsel;
-      F.draw(fb, (sel ? '> ' : '  ') + def.name, 166, 26 + i * 14, sel ? GOLD : [210, 206, 190]);
+      F.draw(fb, this.fit((sel ? '> ' : '  ') + def.name, 120), 166, 26 + i * 14, sel ? GOLD : [210, 206, 190]);
       if (!['file', 'key', 'tool'].includes(def.kind)) F.draw(fb, String(b.n), 292, 26 + i * 14, [230, 230, 120]);
     });
     if (!box.length) F.draw(fb, '  (empty)', 166, 26, GREY);
@@ -235,14 +246,17 @@ export class UI {
     PSX.rect(fb, x, y, w, 1, ...border); PSX.rect(fb, x, y + h - 1, w, 1, ...border);
     PSX.rect(fb, x, y, 1, h, ...border); PSX.rect(fb, x + w - 1, y, 1, h, ...border);
   }
-  wrap(text, width) {
-    const words = text.split(' '), lines = [];
-    let cur = '';
-    for (const w of words) { const t = cur ? cur + ' ' + w : w; if (this.F.width(t) > width) { lines.push(cur); cur = w; } else cur = t; }
-    if (cur) lines.push(cur);
-    return lines;
+  wrap(text, width) { return wrapText(text, width, s => this.F.width(s)); }
+  fit(text, width) { return fitText(text, width, s => this.F.width(s)); }
+  narrativePages(lines, rows) { return paginate(lines.flatMap(l => this.wrap(l, 280)), rows); }
+  introPages() { return this.narrativePages(this.g.A.content.game.intro, 12); }
+  chapterPages(ch) { return this.narrativePages(ch.text, 8); }
+  introLength() { return this.introPages()[this.g.introPage || 0].reduce((n,l) => n + l.length + 8, 0); }
+  center(s, y, col = WHITE, scale = 1) {
+    if (this.F.width(s) * scale > 288 && scale > 1) scale = 1;
+    s = this.fit(s, 288 / scale);
+    this.F.draw(this.fb, s, 160 - (this.F.width(s) * scale >> 1), y, col, scale);
   }
-  center(s, y, col = WHITE, scale = 1) { this.F.draw(this.fb, s, 160 - (this.F.width(s) * scale >> 1), y, col, scale); }
 
   drawOverlays() {
     if (this.boxUI) { this.drawBox(); if (this.msg) this.drawMsg(); return; }
@@ -285,23 +299,26 @@ export class UI {
   drawMsg() {
     const m = this.msg, F = this.F;
     this.box(8, 186, 304, 48);
-    if (m.who) { const w = F.width(m.who) + 12; this.box(8, 172, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, m.who, 14, 175, GOLD); }
-    const lines = this.wrap(m.lines[m.page].slice(0, Math.floor(m.shown)), 290);
-    lines.slice(0, 3).forEach((l, i) => F.draw(this.fb, l, 16, 191 + i * 13));
-    if (m.choice !== undefined && m.shown >= m.lines[m.page].length) {
+    if (m.who) { const who = this.fit(m.who, 290), w = F.width(who) + 12; this.box(8, 172, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, who, 14, 175, GOLD); }
+    const lines = m.lines[m.page].split('\n');
+    let remaining = Math.floor(m.shown);
+    lines.forEach((l, i) => { F.draw(this.fb, l.slice(0, Math.max(0, remaining)), 16, 191 + i * 13); remaining -= l.length + 1; });
+    if (m.choice !== undefined && m.page === m.lines.length - 1 && m.shown >= m.lines[m.page].length) {
       F.draw(this.fb, 'YES', 110, 218, m.choice === 0 ? [255, 230, 120] : [140, 140, 140]);
       F.draw(this.fb, 'NO', 190, 218, m.choice === 1 ? [255, 230, 120] : [140, 140, 140]);
       F.draw(this.fb, '>', m.choice === 0 ? 100 : 180, 218, [255, 230, 120]);
     }
   }
   drawFile() {
-    const fb = this.fb, F = this.F, f = this.file, doc = this.g.A.content.files[f.id], pg = doc.pages[f.page];
+    const fb = this.fb, F = this.F, f = this.file, doc = this.g.A.content.files[f.id];
+    const pages = f.pages || this.filePages(f.id), pg = pages[f.page];
     PSX.darken(fb, 0.3);
     this.box(30, 24, 260, 180, [58, 52, 40], 0.95, [120, 104, 80]);
-    F.draw(fb, doc.title, 44, 32, [230, 200, 140]);
-    F.draw(fb, pg[0], 44, 54, [220, 200, 160]);
-    pg.slice(1).forEach((l, i) => F.draw(fb, l, 44, 76 + i * 16, [220, 214, 196]));
-    F.draw(fb, `${f.page + 1}/${doc.pages.length}`, 250, 186, [160, 150, 130]);
+    F.draw(fb, this.fit(doc.title, 232), 44, 32, [230, 200, 140]);
+    pg.forEach((l, i) => F.draw(fb, l, 44, 54 + i * 14, i === 0 ? [220, 200, 160] : [220, 214, 196]));
+    F.draw(fb, 'LEFT / RIGHT: PAGE', 44, 186, [160, 150, 130]);
+    const label = `${f.page + 1}/${pages.length}`;
+    F.draw(fb, label, 276 - F.width(label), 186, [160, 150, 130]);
   }
   drawMenu() {
     const fb = this.fb, M = this.menu;
@@ -501,15 +518,15 @@ export class UI {
       .forEach((l, i) => this.center(l, 188 + i * 13, GREY));
   }
   drawIntro(t) {
-    const fb = this.fb, lines = this.g.A.content.game.intro;
+    const fb = this.fb, pages = this.introPages(), page = this.g.introPage || 0, lines = pages[page];
     fb.fill(0, 0, 0);
-    const shown = Math.floor(t * 40);
+    const shown = this.g.introReveal ? Infinity : Math.floor(t * 40);
     let n = 0;
     lines.forEach((l, i) => {
       const s = l.slice(0, Math.max(0, shown - n)); n += l.length + 8;
-      this.F.draw(fb, s, 160 - (this.F.width(l) >> 1), 36 + i * 15, [200, 196, 186]);
+      this.F.draw(fb, s, 160 - (this.F.width(l) >> 1), 26 + i * 14, [200, 196, 186]);
     });
-    if (t > 3 && Math.floor(this.g.time * 2) % 2 === 0) this.center('PRESS ENTER', 214, [120, 120, 120]);
+    if (t > 0.8) this.center(shown < n ? 'ENTER: reveal text' : page < pages.length - 1 ? 'ENTER: next page' : 'PRESS ENTER', 214, [150, 150, 140]);
   }
   drawSlots(title, sel) {
     const fb = this.fb, F = this.F;
@@ -521,8 +538,8 @@ export class UI {
       this.box(44, y, 232, 36, [0, 0, 0], 0.9, i === sel ? GOLD : [100, 100, 96]);
       if (!s) { F.draw(fb, `${i + 1}.  NO DATA`, 54, y + 12, GREY); return; }
       const t = Math.floor(s.time), hh = Math.floor(t / 3600), mm = Math.floor(t / 60) % 60, ss = t % 60;
-      F.draw(fb, `${i + 1}.  ${s.room}`, 54, y + 5, WHITE);
-      F.draw(fb, `TIME ${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}    SAVES ${s.saves}`, 72, y + 19, [190, 186, 170]);
+      F.draw(fb, this.fit(`${i + 1}.  ${s.room}`, 212), 54, y + 5, WHITE);
+      F.draw(fb, this.fit(`TIME ${hh}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}   SAVES ${s.saves}`, 212), 54, y + 19, [190, 186, 170]);
     });
   }
   drawDead(t) {
@@ -536,23 +553,28 @@ export class UI {
     const fb = this.fb, S = this.g.state;
     PSX.darken(fb, Math.max(0, 1 - t / 2));
     if (t < 2) return;
-    ch.text.forEach((l, i) => this.center(l, 30 + i * 15, [200, 196, 186]));
-    const y = 40 + ch.text.length * 15;
-    const t2 = Math.floor(S.time), tm = `${Math.floor(t2 / 3600)}:${String(Math.floor(t2 / 60) % 60).padStart(2, '0')}:${String(t2 % 60).padStart(2, '0')}`;
-    if (ch.final) {                                                   // RE-style results and rank
-      this.center('THE END', y, [200, 20, 20], 2);
-      const acc = S.stats.shots ? Math.round(100 * S.stats.kills / S.stats.shots) : 0;
-      const pts = (t2 < 5400 ? 2 : t2 < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
-      const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
-      this.center(`CLEAR TIME ${tm}    SAVES ${S.saves}    KILLS ${S.stats.kills}`, y + 30, [190, 186, 170]);
-      this.center(`RANK  ${rank}`, y + 50, [255, 220, 90], 2);
-      if (t > 5) this.center('PRESS ENTER', y + 80, [120, 120, 120]);
+    const pages = this.chapterPages(ch), page = ch.page || 0;
+    pages[page].forEach((l, i) => this.center(l, 24 + i * 13, [200, 196, 186]));
+    if (page < pages.length - 1) {
+      if (t > 4) this.center(`ENTER: next page (${page + 1}/${pages.length})`, 218, GREY);
       return;
     }
-    this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', y, [200, 20, 20]);
-    this.center(`Time ${tm}    Shots ${S.stats.shots}    Kills ${S.stats.kills}    Saves ${S.saves}`, y + 22, [170, 166, 150]);
-    if (t > 4) this.center('PRESS ENTER', y + 46, [120, 120, 120]);
+    const seconds = Math.floor(S.time), tm = `${Math.floor(seconds / 3600)}:${String(Math.floor(seconds / 60) % 60).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+    if (ch.final) {
+      this.center('THE END', 137, RED, 2);
+      const pts = (seconds < 5400 ? 2 : seconds < 7200 ? 1 : 0) + (S.saves <= 3 ? 2 : S.saves <= 8 ? 1 : 0) + (S.stats.shots && S.stats.kills / S.stats.shots > 0.25 ? 1 : 0);
+      const rank = pts >= 5 ? 'A' : pts >= 3 ? 'B' : 'C';
+      this.center(`TIME ${tm}   SAVES ${S.saves}   KILLS ${S.stats.kills}`, 171, [190, 186, 170]);
+      this.center(`RANK  ${rank}`, 191, GOLD, 2);
+      if (t > 5) this.center('PRESS ENTER', 222, GREY);
+      return;
+    }
+    this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', 146, RED);
+    this.center(`Time ${tm}   Saves ${S.saves}`, 169, GREY);
+    this.center(`Shots ${S.stats.shots}   Kills ${S.stats.kills}`, 183, GREY);
+    if (t > 4) this.center('PRESS ENTER', 218, GREY);
   }
+
 }
 
 // frame a model by its bounding sphere (icons, item examine)

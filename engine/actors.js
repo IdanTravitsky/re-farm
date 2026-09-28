@@ -25,7 +25,7 @@ class Actor {
     if (!this.model) throw new Error('model not loaded: ' + modelName);
     this.anim = new Animator(CLIPSETS[clipset](g.A.poses[modelName] || {}));
     this.x = x; this.y = y; this.z = g.room.floor(x, y); this.yaw = yaw;
-    this.scale = 1; this.hide = new Set(); this.flashT = 0; this.r = 0.3; this.wig = 1;
+    this.scale = 1; this.hide = new Set(); this.flashT = 0; this.r = 0.23; this.wig = 1;
     this.scripted = null; this.arrived = true; this.hidden = false;
   }
   move(dx, dy) {
@@ -34,8 +34,9 @@ class Actor {
     const n = Math.max(1, Math.ceil(Math.hypot(dx, dy) / (R.res * 0.45)));
     dx /= n; dy /= n;
     for (let i = 0; i < n; i++) {
-      const openX = R.walkable(this.x + dx, this.y), openY = R.walkable(this.x, this.y + dy);
-      if (openX && openY && R.walkable(this.x + dx, this.y + dy)) { this.x += dx; this.y += dy; moved ||= !!(dx || dy); }
+      const can = (x,y) => (R.canStand ? R.canStand(x,y,this.r) : R.walkable(x,y)) && !this.g.blocksActor?.(this,x,y) && R.floor(x,y)-R.floor(this.x,this.y) <= 0.22 && R.floor(this.x,this.y)-R.floor(x,y) <= 0.65;
+      const openX = can(this.x + dx, this.y), openY = can(this.x, this.y + dy);
+      if (openX && openY && can(this.x + dx, this.y + dy)) { this.x += dx; this.y += dy; moved ||= !!(dx || dy); }
       else if (openX && dx) { this.x += dx; moved = true; }
       else if (openY && dy) { this.y += dy; moved = true; }
     }
@@ -45,6 +46,8 @@ class Actor {
   // cutscene control: {move_to:[x,y], run, anim, face:[x,y] or "player", yaw, at:[x,y], hidden}
   script(v) {
     this.scripted = { ...v };
+    if (v.path?.length) { this.scripted.waypoints = v.path.map(p=>[...p]); this.scripted.move_to = this.scripted.waypoints.shift(); }
+    v = this.scripted;
     if (v.at) { this.x = v.at[0]; this.y = v.at[1]; this.z = this.g.room.floor(this.x, this.y); }
     if (v.hidden !== undefined) this.hidden = !!v.hidden;
     this.arrived = !v.move_to;
@@ -59,14 +62,23 @@ class Actor {
     if (!s) return false;
     if (!s.move_to) { this.anim.update(DT); return !!s.hold; }
     const [tx, ty] = s.move_to, d = Math.hypot(tx - this.x, ty - this.y);
-    if (d < 0.2) { this.arrived = true; this.scripted = s.hold ? { hold: true } : null; if (!s.keep_anim) this.anim.play(s.then || 'idle'); return true; }
-    if (!s.keep_yaw) this.yaw = yawTo(this.x, this.y, tx, ty);
+    if (d < (s.nav ? 0.065 : 0.16)) {
+      if(s.nav?.length){s.move_to=s.nav.shift();return true;}
+      if(s.nav){s.move_to=s.destination;s.nav=null;return true;}
+      if(s.waypoints?.length){s.move_to=s.waypoints.shift();return true;}
+      this.arrived = true; this.scripted = s.hold ? { hold: true } : null; if (!s.keep_anim) this.anim.play(s.then || 'idle'); return true; }
+    if (!s.keep_yaw) turnTo(this, yawTo(this.x, this.y, tx, ty), s.turn_speed || (s.keep_anim ? 100 : 300));
     const f0 = fwd(yawTo(this.x, this.y, tx, ty));
-    const sp = (s.speed || (s.run ? 3.0 : 1.3)) * DT, f = fwd(this.yaw);
+    const sp = (s.speed || (s.run ? 3.0 : 1.3)) * DT;
     const x0 = this.x, y0 = this.y;
     this.move(f0[0] * Math.min(sp, d), f0[1] * Math.min(sp, d));
     s.stuck = Math.hypot(this.x - x0, this.y - y0) < sp * 0.3 ? (s.stuck || 0) + DT : 0;
-    if ((s.through || s.stuck > 0.5) && s.stuck > 0) { this.x = x0 + f0[0] * Math.min(sp, d); this.y = y0 + f0[1] * Math.min(sp, d); }   // cutscenes never hang on a wall
+    if (s.through) { this.x = x0 + f0[0] * Math.min(sp, d); this.y = y0 + f0[1] * Math.min(sp, d); }
+    else if (s.stuck > .25 && !s.nav && (!s.retryAt || this.g.time >= s.retryAt)) {
+      s.retryAt=this.g.time+1;
+      const route=this.g.room.path(this.x,this.y,tx,ty,this.r,(x,y)=>this.g.blocksActor(this,x,y));
+      if(route?.length){s.destination=route.at(-1);s.nav=route;s.move_to=s.nav.shift();s.stuck=0;}
+    }
     if (!s.keep_anim) this.anim.play(s.run ? 'run' : 'walk');
     this.anim.update(DT);
     return true;
@@ -192,7 +204,7 @@ export class Player extends Actor {
     if (this.mode === 'aim') { this.mode = 'move'; this.updateHide(); }
     if (I.reloadPressed && w && this.cool <= 0) this.reload(w);
     const run = I.run && !danger && this.slowT <= 0;
-    if (I.back && I.runPressed) { this.quickTurn = 180; return; }
+    if (I.back && I.run && (I.runPressed || I.downPressed)) { this.quickTurn = 180; return; }
     const turn = run ? 200 : 150;
     if (I.left) this.yaw += turn * DT;
     if (I.right) this.yaw -= turn * DT;
@@ -242,12 +254,12 @@ export class Enemy extends Actor {
   constructor(g, spec) {
     const def = g.A.content.actors[spec.type];
     if (!def) throw new Error('unknown actor type ' + spec.type);
-    let [x, y] = spec.through || def.behavior === 'prop' ? spec.at : g.room.nearestWalkable(spec.at[0], spec.at[1]);
+    let [x, y] = spec.through || def.behavior === 'prop' ? spec.at : g.room.nearestWalkable(spec.at[0], spec.at[1], 4, def.radius || .23);
     const face = spec.face === 'player' && g.player ? [g.player.x, g.player.y] : Array.isArray(spec.face) ? spec.face : null;
     const yaw = face ? yawTo(x, y, face[0], face[1]) : (spec.yaw || 0);
     super(g, def.model, def.clips, x, y, yaw);
     Object.assign(this, { id: spec.id, type: spec.type, def, room: spec.room, B: def.behavior || 'shambler' });
-    this.hp = spec.hp ?? def.hp ?? 1; this.scale = def.scale || 1; this.r = def.radius || 0.3; this.wig = def.wiggle || 1;
+    this.hp = spec.hp ?? def.hp ?? 1; this.scale = def.scale || 1; this.r = def.radius || 0.23; this.wig = def.wiggle || 1;
     const idleByDefault = ['chaser', 'leaper', 'hazard', 'npc', 'prop', 'target'].includes(this.B);
     this.state = spec.state || (spec.face === 'player' || !idleByDefault ? 'chase' : 'idle');
     if (this.B === 'leaper' && !spec.state) this.state = 'perched';
@@ -375,7 +387,7 @@ export class Enemy extends Actor {
       else if (dist > (def.range || 1.8) + 2) { this.state = 'idle'; this.anim.play('idle'); }
       return;
     }
-    const d = turnTo(this, face, def.turn || 120);
+    const d = angDiff(face, this.yaw);
     if (this.B === 'spitter' && dist > 2.2 && dist < (def.spit_range || 7) && this.cool <= 0 && Math.abs(d) < 25 &&
         g.room.shotLos(this.x, this.y, this.z + 1.5, p.x, p.y, p.z + 1.2)) {
       this.state = 'spit'; this.t = 0; this.hitDone = false; this.anim.play('spit', { restart: true, fade: 0.08 });
@@ -399,9 +411,27 @@ export class Enemy extends Actor {
       if ((this.flowT -= DT) <= 0 || !g.flowField) { g.refreshFlow(); this.flowT = 0.3; }
       dir = g.room.flowDir(g.flowField, this.x, this.y);
     }
+    // Flow fields are cheap, but a large creature needs a route with body clearance.
+    // Replan only after a genuine stall, then retain the route while pursuing.
+    if(this.chasePath && Math.hypot(tx-this.chaseGoal[0],ty-this.chaseGoal[1])>1.5 && g.time>this.chaseRetry) this.chasePath=null;
+    if((this.chaseStuck||0)>.25 && !this.chasePath && g.time>=(this.chaseRetry||0)) {
+      this.chaseRetry=g.time+1;this.chaseGoal=[tx,ty];
+      this.chasePath=g.room.path(this.x,this.y,tx,ty,this.r,(x,y)=>g.blocksActor(this,x,y));
+      this.chaseStuck=0;
+    }
+    if(this.chasePath){
+      while(this.chasePath.length && Math.hypot(this.chasePath[0][0]-this.x,this.chasePath[0][1]-this.y)<.07)this.chasePath.shift();
+      if(this.chasePath.length){const[x,y]=this.chasePath[0],len=Math.hypot(x-this.x,y-this.y);dir=[(x-this.x)/len,(y-this.y)/len];}
+      else this.chasePath=null;
+    }
     let [mx, my] = fwd(yawTo(this.x, this.y, tx, ty));
-    if (dir) { [mx, my] = dir; turnTo(this, yawTo(0, 0, dir[0], dir[1]), (def.turn || 120) * 0.5); }
-    if (!keepAway && dist > def.range * 0.8 && (Math.abs(d) < 70 || dir || this.B === 'swarm')) this.move(mx * def.speed * DT, my * def.speed * DT);
+    if (dir) [mx, my] = dir;
+    turnTo(this, dir ? yawTo(0,0,mx,my) : face, def.turn || 120);
+    if (!keepAway && dist > def.range * 0.8 && (Math.abs(d) < 70 || dir || this.B === 'swarm')) {
+      const x=this.x,y=this.y;this.move(mx * def.speed * DT, my * def.speed * DT);
+      this.chaseStuck=Math.hypot(this.x-x,this.y-y)<def.speed*DT*.4?(this.chaseStuck||0)+DT:0;
+      if(this.chasePath&&this.chaseStuck>.5)this.chasePath=null;
+    }
     this.anim.play(this.B === 'chaser' || this.B === 'swarm' || this.B === 'leaper' ? 'run' : 'walk', { fade: 0.15 });
   }
   // companions: keep near the player, shoot what's hunting you (def.gun), follow through doors

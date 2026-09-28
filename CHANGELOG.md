@@ -1,5 +1,18 @@
 # Polish changes
 
+## Second pass: interiors, cutscenes and tunnel
+
+- Replace point-only collision with a swept circular footprint, including live vehicle rectangles; stop actors stepping onto furniture and resnap loaded player positions safely.
+- Remove raised sofas, beds and other furniture from nine room walk grids. Correct the kitchen table's oversized collision footprint and make nearby scenery/pickups usable from clear floor.
+- Route scripted actors around obstacles with A*, honor waits on waypoint paths, and remove the automatic wall-phasing fallback. Smooth facing changes and choreograph Wilson around the sheriff SUV and wagon.
+- Give the escaping truck a turning path, keep the Amalgam on a separate pursuit route, and verify that the creature actually runs after it.
+- Rebuild the Amalgam as a compact mass of nine people with additional supporting legs and asynchronous cluster motion. Add body-size-aware fallback navigation for stalled enemies.
+- Move the city's Amalgam entrance to open road in front of the burning wreck and show its arrival with an appropriate camera.
+- Replace the RV lot with an authored concrete tunnel full of damaged cars. Rebuild seven camera backgrounds in both resolutions, aligned depth masks, the collision grid and route map. Include the Blender source and asset generators.
+- Wrap and paginate intro cards, chapter text, the ending, dialogue and documents using actual font widths. Preserve every narrative line and reserve space for choices and statistics.
+- Reveal fully laid-out dialogue without shifting words between lines; queue overlapping messages instead of overwriting them. Keep long inventory/storage/save labels within their panels.
+- Accept the quick-turn chord regardless of whether Down or Shift was pressed first.
+
 ## Interactions and progression
 
 - Show the exact action near an interaction point, with V to select alternatives in overlapping hotspots.

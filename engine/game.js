@@ -117,7 +117,7 @@ export class Game {
     this.room = room; S.room = roomId; S.location = locId; S.visited[roomId] = true;
     if (!this.player) this.player = new Player(this, x, y, yaw);
     const p = this.player;
-    [p.x, p.y] = room.nearestWalkable(x, y);
+    [p.x, p.y] = room.nearestWalkable(x, y, 4, p.r);
     p.z = room.floor(p.x, p.y); p.yaw = yaw; p.mode = 'move'; p.target = null; p.pickDone = null; p.invulnT = 0.8; p.quickTurn = 0; p.scripted = null; p.grab = null;
     p.anim.play('idle', { restart: true, fade: 0 }); p.updateHide();
     this.cam = -1; this.forcedCamera = null; this.flowField = null; this.particles = []; this.muzzle = null;
@@ -485,6 +485,14 @@ export class Game {
     if (name === 'moan_deep') return s.moan(arg, true);
     if (s[name]) s[name](arg);
   }
+  blocksActor(actor,x,y) {
+    for(const e of this.enemies){
+      const box=e.def?.solidFootprint;if(e===actor||!box||!e.alive()||e.hidden)continue;
+      const a=e.yaw*D2R,dx=x-e.x,dy=y-e.y,lx=dx*Math.cos(a)+dy*Math.sin(a),ly=-dx*Math.sin(a)+dy*Math.cos(a);
+      if(Math.abs(lx)<box[0]+actor.r&&Math.abs(ly)<box[1]+actor.r)return true;
+    }
+    return false;
+  }
   separate() {
     const all = [this.player, ...this.enemies.filter(e => e.alive() && !e.hidden && e.state !== 'grab' && e.B !== 'prop')];
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
@@ -503,7 +511,11 @@ export class Game {
     switch (this.mode) {
       case 'title': return this.updateTitle(I);
       case 'intro':
-        if (I.confirmPressed && this.t > 0.8) { this.mode = 'loading'; this.newGame().catch(error => this.fail(error)); }
+        if (I.confirmPressed && this.t > 0.15) {
+          if (!this.introReveal && this.t * 40 < this.ui.introLength()) this.introReveal = true;
+          else if ((this.introPage || 0) < this.ui.introPages().length - 1) { this.introPage = (this.introPage || 0) + 1; this.introReveal = false; this.t = 0; }
+          else { this.mode = 'loading'; this.newGame().catch(error => this.fail(error)); }
+        }
         return;
       case 'loading': case 'error': return;
       case 'load': case 'save': return this.updateSlots(I);
@@ -520,7 +532,11 @@ export class Game {
         if (this.t > 2 && I.cancelPressed) { this.mode = 'title'; this.t = 0; this.music.play(null); }
         return;
       case 'chapter':
-        if (this.t > 4 && I.confirmPressed) { if (this.chapter.hasNext) this.continueToNext().catch(error => this.fail(error)); else { this.mode = 'title'; this.t = 0; } }
+        if (this.t > 4 && I.confirmPressed) {
+          if ((this.chapter.page || 0) < this.ui.chapterPages(this.chapter).length - 1) { this.chapter.page = (this.chapter.page || 0) + 1; }
+          else if (this.chapter.hasNext) this.continueToNext().catch(error => this.fail(error));
+          else { this.mode = 'title'; this.t = 0; }
+        }
         return;
       case 'play': return this.updatePlay(I);
     }
@@ -536,7 +552,7 @@ export class Game {
       this.sfx('confirm');
       if (opts[this.sel] === 'CONTINUE') { this.loadFrom('checkpoint').catch(error => this.fail(error)); }
       else if (opts[this.sel] === 'LOAD GAME' && has) { this.mode = 'load'; this.sel = 0; this.slotBack = 'title'; }
-      else { this.mode = 'intro'; this.t = 0; }
+      else { this.mode = 'intro'; this.t = 0; this.introPage = 0; this.introReveal = false; }
     }
   }
   updateSlots(I) {
@@ -603,7 +619,7 @@ export class Game {
   }
   drawWorld() {
     const fb = this.fb, R = this.room, C = R.cameras[this.cam], S = this.state;
-    if (C.plate) fb.blit(C.plate.px); else fb.fill(0, 0, 0);
+    if (C.plate) fb.blit((fb.scale > 1 && C.plateHD ? C.plateHD : C.plate).px); else fb.fill(0, 0, 0);
     fb.sceneDepth(C.depth);
     for (const s of C.sprites) if (s.img && !S.taken[s.pickup]) PSX.blitSprite(fb, s.img, s.x, s.y);
     const boost = this.muzzle ? 0.5 : 0;

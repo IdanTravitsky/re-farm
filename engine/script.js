@@ -156,7 +156,7 @@ export class Script {
       case 'cinematic': g.cinematic = !!v; break;                // player input off, letterbox on
       case 'actor': {
         const act = v.id === 'player' ? g.player : g.enemies.find(e => e.id === v.id);
-        if (act) { act.script(v); if (v.wait && v.move_to) { c.actor = act; c.block = 'actor'; } }
+        if (act) { act.script(v); if (v.wait && (v.move_to || v.path?.length)) { c.actor = act; c.block = 'actor'; } }
         break;
       }
       case 'heal': g.player.heal(v); break;

@@ -40,6 +40,12 @@ The original manual-save key is retained. Browser storage is isolated by origin,
 
 ## Main changes
 
+- Body-radius collision keeps Bryan clear of walls and furniture. Raised furniture is removed from interior walk grids; saved positions are moved back to clear floor when loaded.
+- Intro, dialogue, documents and chapter endings wrap and paginate without losing text. Long questions reserve room for their choices.
+- Wilson walks around his SUV. The farm truck follows a turning route while the Amalgam pursues separately; cutscene actors no longer automatically pass through walls when stuck.
+- A nine-person Amalgam with independently moving body clusters and additional support legs. Its city entrance is on the reachable side of the burning wreck.
+- The RV chapter takes place in North Pass Tunnel, with abandoned damaged cars, seven new camera views, native 640×480 backgrounds, and matching depth/collision data.
+
 - Visible interaction labels and cycling among nearby actions; bolt cutters can be collected from the van's storage-box approach.
 - Inventory icons now render correctly; file reading and item submenus display correctly. Stacked herbs can combine without overflowing inventory slots.
 - Swept movement prevents tunnelling through thin collision cells and crossing blocked diagonal corners. Enemy navigation respects those corners; melee/charge damage cannot pass through walls.
@@ -74,4 +80,9 @@ Set `GAME_URL` for a different server URL or `PLAYWRIGHT_EXECUTABLE_PATH` to use
 
 ## Art and scope
 
-The original backgrounds are 320×240 pre-rendered images. Enhanced mode renders live geometry at 640×480 and improves presentation; it does not invent high-resolution environmental detail. The repository does not include the original scene-authoring files needed to re-render the environments. This is a substantial tested polish pass, not a claim that every possible playthrough or visual edge case is bug-free.
+The original backgrounds are 320×240 pre-rendered images. Enhanced mode renders live geometry at 640×480 and improves presentation; it does not invent high-resolution environmental detail. The original scene-authoring files are absent. The new tunnel is an exception: its native 640×480 renders, Blender scene and reproducible scene builder are included in `tools/`. The Amalgam generator and original model snapshot are included there too. This is a substantial tested polish pass, not a claim that every possible playthrough or visual edge case is bug-free.
+
+
+## Rebuild the new art
+
+`tools/build_tunnel.py` uses Python 3.11, `bpy==4.5.3`, NumPy and Pillow to rebuild the tunnel scene, both background resolutions, depth masks, collision grid and camera metadata together. Run it from any directory with that environment's Python. `python3 tools/build_amalgam.py` rebuilds the Amalgam from `tools/amalgam-source.json` using only the standard library. These tools are for editing assets; neither is needed to play.

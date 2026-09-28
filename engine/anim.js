@@ -185,6 +185,10 @@ export function dogClips(P) {
 export function wiggle(pose, model, t, amt = 1) {
   const out = { ...pose };
   for (const p of model.parts) {
+    if (model.name === 'amalgam' && /^mass_\d+$/.test(p.name)) {
+      const k=Number(p.name.split('_')[1]);
+      out[p.name]=k>=7 ? [Math.sin(t*4.2+k*1.7)*17,Math.cos(t*2+k)*4,0] : [Math.sin(t*1.7+k)*2.5,Math.cos(t*1.3+k)*3,Math.sin(t*1.1+k)*2];
+    }
     if (!p.name.includes('tent')) continue;
     const k = p.name.charCodeAt(p.name.length - 1) + p.name.charCodeAt(p.name.length - 3) * 7;
     const b = out[p.name] || [0, 0, 0];

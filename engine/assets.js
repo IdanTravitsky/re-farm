@@ -27,7 +27,7 @@ export class Assets {
     const P = this.P;
     this.content = await P.json('content.json');
     this.poses = await P.json('poses.json');
-    if (!P.headless) this.font = new Font(await this.image('font.png'), await P.json('font.json'));
+    this.font = new Font(P.headless ? null : await this.image('font.png'), await P.json('font.json'));
     await Promise.all(this.content.models.map(m => this.model(m)));
     return this;
   }
@@ -57,6 +57,7 @@ export class Assets {
   async loadPlates(room) {
     await Promise.all(room.cameras.map(async c => {
       c.plate = await this.image('bg/' + c.id + '.png');
+      if (c.plateHDFile) c.plateHD = await this.image('bg/' + c.plateHDFile);
       const d = await this.png('bg/' + c.id + '_depth.png');
       c.depth = new Float32Array(d.w * d.h);
       for (let i = 0; i < c.depth.length; i++) c.depth[i] = ((d.data[i * 3] << 8) | d.data[i * 3 + 1]) / 100;

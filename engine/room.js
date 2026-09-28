@@ -27,12 +27,33 @@ export class Room {
       this.h[i] = ((D[b1 + a + 1] << 8) | D[b1 + a + 2]) - 32768;
       this.top[i] = ((D[b2 + a] << 8) | D[b2 + a + 1]) - 32768;
     }
+    if (json.walk_floor_limit) {
+      const [lo, hi] = json.walk_floor_limit;
+      for (let k=0;k<n;k++) if (this.h[k]/100 < lo || this.h[k]/100 > hi) this.walkA[k]=0;
+    }
+    // Small authored floor corridors repair oversized baked furniture footprints.
+    // Walls remain blocked; camera/depth data continue to provide visual occlusion.
+    for (const patch of json.floor_corridors || []) {
+      const [x1,y1,x2,y2]=patch.rect;
+      for(let j=0;j<this.ny;j++)for(let i=0;i<this.nx;i++){
+        const x=this.x0+(i+.5)*this.res,y=this.y0+(j+.5)*this.res,k=j*this.nx+i;
+        if(x<x1||x>x2||y<y1||y>y2)continue;
+        if(this.best[k]===255){
+          let found=-1;
+          for(let r=1;r<10&&found<0;r++)for(let yy=Math.max(0,j-r);yy<=Math.min(this.ny-1,j+r);yy++)for(let xx=Math.max(0,i-r);xx<=Math.min(this.nx-1,i+r);xx++){
+            const near=yy*this.nx+xx;if(this.walkA[near]&&this.best[near]!==255){found=near;break;}
+          }
+          if(found>=0){this.best[k]=this.best[found];this.mask[k]=this.mask[found];}
+        }
+        this.walkA[k]=1;this.h[k]=Math.round(patch.floor*100);
+      }
+    }
     this.map = json.map;
     this.mapCells = json.map ? b64(json.map.cells, Uint8Array) : null;
     this.cameras = json.cameras.map(c => ({
       id: c.id, cam: Camera.fromMeta({ world_to_camera: c.world_to_camera, focal_px: c.focal_px, width: 320, height: 240 }),
       lights: c.lights || { pts: [], amb: [0.4, 0.4, 0.4] }, sprites: c.sprites || [],
-      plate: null, depth: null,                          // filled in by Assets.loadPlates
+      plate: null, depth: null, plateHDFile: c.plate_hd, plateHD: null,                          // filled in by Assets.loadPlates
     }));
     // coarse nav grid (2x2 cells, open when 3 of 4 are walkable) for flow fields
     this.cn = this.nx >> 1; this.cm = this.ny >> 1;
@@ -48,6 +69,18 @@ export class Room {
     return i < 0 || j < 0 || i >= this.nx || j >= this.ny ? -1 : j * this.nx + i;
   }
   walkable(x, y) { const k = this.idx(x, y); return k >= 0 && this.walkA[k] === 1; }
+  canStand(x, y, radius = 0.23) {
+    if (!this.walkable(x,y)) return false;
+    const a=Math.floor((x-radius-this.x0)/this.res), b=Math.floor((x+radius-this.x0)/this.res);
+    const c=Math.floor((y-radius-this.y0)/this.res), d=Math.floor((y+radius-this.y0)/this.res);
+    for(let j=c;j<=d;j++) for(let i=a;i<=b;i++) {
+      if(i>=0&&j>=0&&i<this.nx&&j<this.ny&&this.walkA[j*this.nx+i])continue;
+      const left=this.x0+i*this.res, bottom=this.y0+j*this.res;
+      const dx=x-Math.max(left,Math.min(x,left+this.res)),dy=y-Math.max(bottom,Math.min(y,bottom+this.res));
+      if(dx*dx+dy*dy < radius*radius-1e-8)return false;
+    }
+    return true;
+  }
   floor(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.h[k] / 100; }          // sets may sit below ground (interiors)
   surface(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.surf[k]; }
 
@@ -73,15 +106,41 @@ export class Room {
     }
     return true;
   }
-  nearestWalkable(x, y, maxR = 4) {
-    if (this.walkable(x, y)) return [x, y];
+  nearestWalkable(x, y, maxR = 4, radius = 0) {
+    if (this.canStand(x, y, radius)) return [x, y];
     for (let r = this.res; r < maxR; r += this.res) {
       for (let a = 0; a < 32; a++) {
         const px = x + Math.cos(a / 32 * 6.2832) * r, py = y + Math.sin(a / 32 * 6.2832) * r;
-        if (this.walkable(px, py)) return [px, py];
+        if (this.canStand(px, py, radius)) return [px, py];
       }
     }
     return [x, y];
+  }
+  path(ax,ay,bx,by,radius=0.23,blocked=()=>false) {
+    [bx,by]=this.nearestWalkable(bx,by,4,radius);
+    const start=this.idx(ax,ay);let goal=this.idx(bx,by);
+    if(start<0||goal<0)return null;
+    const n=this.walkA.length,cost=new Float64Array(n).fill(Infinity),prev=new Int32Array(n).fill(-1),heap=[];
+    const point=k=>[this.x0+(k%this.nx+.5)*this.res,this.y0+(Math.floor(k/this.nx)+.5)*this.res];
+    const push=(k,f)=>{heap.push([k,f]);let i=heap.length-1;while(i){const p=(i-1)>>1;if(heap[p][1]<=f)break;[heap[p],heap[i]]=[heap[i],heap[p]];i=p;}};
+    const pop=()=>{const top=heap[0],last=heap.pop();if(heap.length){heap[0]=last;let i=0;while(true){let c=i*2+1;if(c>=heap.length)break;if(c+1<heap.length&&heap[c+1][1]<heap[c][1])c++;if(heap[i][1]<=heap[c][1])break;[heap[i],heap[c]]=[heap[c],heap[i]];i=c;}}return top[0];};
+    const valid=new Int8Array(n).fill(-1),closed=new Uint8Array(n);
+    const open=k=>{if(k<0||k>=n)return false;if(valid[k]<0){const[x,y]=point(k);valid[k]=this.canStand(x,y,radius)&&!blocked(x,y)?1:0;}return valid[k]===1;};
+    // The closest valid point need not share a cell with a valid cell centre.
+    // Pick a body-safe nav node, including live vehicle footprints.
+    if(!open(goal)) {
+      let best=Infinity,found=-1;
+      for(let k=0;k<n;k++){const[x,y]=point(k),d=Math.hypot(x-bx,y-by);if(d<4&&d<best&&open(k)){best=d;found=k;}}
+      if(found<0)return null;goal=found;
+    }
+    cost[start]=0;push(start,0);let count=0;
+    while(heap.length&&count++<100000){const k=pop();if(closed[k])continue;closed[k]=1;if(k===goal){const path=[];for(let at=goal;at!==start;at=prev[at]){if(at<0)return null;path.push(point(at));}return path.reverse();}
+      const x=k%this.nx,y=Math.floor(k/this.nx);
+      for(const[dx,dy]of N8){const xx=x+dx,yy=y+dy;if(xx<0||xx>=this.nx||yy<0||yy>=this.ny)continue;const kk=yy*this.nx+xx;if(this.h[kk]-this.h[k]>22||this.h[k]-this.h[kk]>65||!open(kk)||(dx&&dy&&(!open(y*this.nx+xx)||!open(yy*this.nx+x))))continue;
+        const next=cost[k]+(dx&&dy?1.4142:1);if(next>=cost[kk])continue;cost[kk]=next;prev[kk]=k;push(kk,next+Math.hypot(xx-goal%this.nx,yy-Math.floor(goal/this.nx)));
+      }
+    }
+    return null;
   }
   // BFS distance field on the coarse grid, seeded at (x, y)
   flow(x, y) {

@@ -22,7 +22,7 @@ test('all scene plates and depth maps decode and match their camera dimensions',
  let cameras=0;
  for(const id of Object.keys(A.content.world.rooms)){
   const r=await visual.room(id);
-  for(const c of r.cameras){cameras++;assert.equal(c.plate.w,320,c.id);assert.equal(c.plate.h,240,c.id);assert.equal(c.depth.length,320*240,c.id);assert.ok(c.depth.every(Number.isFinite),c.id);}
+  for(const c of r.cameras){cameras++;assert.equal(c.plate.w,320,c.id);assert.equal(c.plate.h,240,c.id);assert.equal(c.depth.length,320*240,c.id);if(c.plateHDFile){assert.equal(c.plateHD.w,640);assert.equal(c.plateHD.h,480);}assert.ok(c.depth.every(Number.isFinite),c.id);}
  }
  assert.equal(cameras,120);
 });
@@ -39,7 +39,7 @@ test('every walkable sample has an in-frame camera and all destinations exist',a
  for(const id of Object.keys(A.content.world.locations)){
   const L=await A.location(id);for(const d of L.doors||[])for(const s of[d.a,d.b]){
    assert.ok(A.content.world.rooms[s.room],`${id}/${d.id}`);
-   const R=await A.room(s.room),p=R.nearestWalkable(...s.spawn);assert.ok(R.walkable(...p),`${id}/${d.id}: blocked spawn`);
+   const R=await A.room(s.room),p=R.nearestWalkable(...s.spawn,4,.23);assert.ok(R.canStand(...p,.23),`${id}/${d.id}: blocked spawn`);
   }
  }
 });
