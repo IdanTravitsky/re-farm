@@ -1,0 +1,164 @@
+[
+  {
+    "room": "bridge",
+    "ground_detail_cells_opened": 823,
+    "vertical_solid_cells": 188,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "city_court",
+    "ground_detail_cells_opened": 509,
+    "vertical_solid_cells": 493,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "city_street",
+    "ground_detail_cells_opened": 4098,
+    "vertical_solid_cells": 1532,
+    "previously_walkable_solid_cells": 9
+  },
+  {
+    "room": "elev",
+    "ground_detail_cells_opened": 12,
+    "vertical_solid_cells": 75,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "farm_barn",
+    "ground_detail_cells_opened": 736,
+    "vertical_solid_cells": 445,
+    "previously_walkable_solid_cells": 31
+  },
+  {
+    "room": "farm_bedroom",
+    "ground_detail_cells_opened": 126,
+    "vertical_solid_cells": 237,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "farm_den",
+    "ground_detail_cells_opened": 67,
+    "vertical_solid_cells": 110,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "farm_house",
+    "ground_detail_cells_opened": 620,
+    "vertical_solid_cells": 545,
+    "previously_walkable_solid_cells": 79
+  },
+  {
+    "room": "farm_loft",
+    "ground_detail_cells_opened": 568,
+    "vertical_solid_cells": 555,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "farm_outside",
+    "ground_detail_cells_opened": 8202,
+    "vertical_solid_cells": 1110,
+    "previously_walkable_solid_cells": 229
+  },
+  {
+    "room": "farm_upstairs",
+    "ground_detail_cells_opened": 103,
+    "vertical_solid_cells": 323,
+    "previously_walkable_solid_cells": 199
+  },
+  {
+    "room": "garage_deck",
+    "ground_detail_cells_opened": 2375,
+    "vertical_solid_cells": 1846,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "garage_lobby",
+    "ground_detail_cells_opened": 236,
+    "vertical_solid_cells": 352,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "hosp_12",
+    "ground_detail_cells_opened": 657,
+    "vertical_solid_cells": 684,
+    "previously_walkable_solid_cells": 347
+  },
+  {
+    "room": "hosp_24",
+    "ground_detail_cells_opened": 59,
+    "vertical_solid_cells": 203,
+    "previously_walkable_solid_cells": 136
+  },
+  {
+    "room": "hs_street",
+    "ground_detail_cells_opened": 5720,
+    "vertical_solid_cells": 1778,
+    "previously_walkable_solid_cells": 57
+  },
+  {
+    "room": "lab_airlock",
+    "ground_detail_cells_opened": 10,
+    "vertical_solid_cells": 98,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "lab_corr",
+    "ground_detail_cells_opened": 53,
+    "vertical_solid_cells": 380,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "lab_main",
+    "ground_detail_cells_opened": 1037,
+    "vertical_solid_cells": 996,
+    "previously_walkable_solid_cells": 41
+  },
+  {
+    "room": "road_main",
+    "ground_detail_cells_opened": 7489,
+    "vertical_solid_cells": 138,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "sewer_cistern",
+    "ground_detail_cells_opened": 800,
+    "vertical_solid_cells": 863,
+    "previously_walkable_solid_cells": 224
+  },
+  {
+    "room": "sewer_office",
+    "ground_detail_cells_opened": 182,
+    "vertical_solid_cells": 213,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "sewer_tunnel",
+    "ground_detail_cells_opened": 3552,
+    "vertical_solid_cells": 1289,
+    "previously_walkable_solid_cells": 342
+  },
+  {
+    "room": "stair_12",
+    "ground_detail_cells_opened": 58,
+    "vertical_solid_cells": 110,
+    "previously_walkable_solid_cells": 0
+  },
+  {
+    "room": "trailer_in",
+    "ground_detail_cells_opened": 475,
+    "vertical_solid_cells": 473,
+    "previously_walkable_solid_cells": 65
+  },
+  {
+    "room": "trailer_kid",
+    "ground_detail_cells_opened": 41,
+    "vertical_solid_cells": 168,
+    "previously_walkable_solid_cells": 29
+  },
+  {
+    "room": "ward_24",
+    "ground_detail_cells_opened": 3172,
+    "vertical_solid_cells": 969,
+    "previously_walkable_solid_cells": 0
+  }
+]

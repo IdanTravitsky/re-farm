@@ -13,7 +13,7 @@ const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]
 
 export class Room {
   // json: rooms/<id>.json; gridImg: its decoded packed-grid PNG ({w, h, ch: 3, data})
-  constructor(json, gridImg) {
+  constructor(json, gridImg, bodyImg = null) {
     Object.assign(this, { id: json.id, location: json.location, name: json.name, music: json.music, wind: json.wind || 0 });
     const g = json.grid;
     Object.assign(this, { x0: g.x0, y0: g.y0, res: g.res, nx: g.nx, ny: g.ny });
@@ -31,23 +31,7 @@ export class Room {
       const [lo, hi] = json.walk_floor_limit;
       for (let k=0;k<n;k++) if (this.h[k]/100 < lo || this.h[k]/100 > hi) this.walkA[k]=0;
     }
-    // Small authored floor corridors repair oversized baked furniture footprints.
-    // Walls remain blocked; camera/depth data continue to provide visual occlusion.
-    for (const patch of json.floor_corridors || []) {
-      const [x1,y1,x2,y2]=patch.rect;
-      for(let j=0;j<this.ny;j++)for(let i=0;i<this.nx;i++){
-        const x=this.x0+(i+.5)*this.res,y=this.y0+(j+.5)*this.res,k=j*this.nx+i;
-        if(x<x1||x>x2||y<y1||y>y2)continue;
-        if(this.best[k]===255){
-          let found=-1;
-          for(let r=1;r<10&&found<0;r++)for(let yy=Math.max(0,j-r);yy<=Math.min(this.ny-1,j+r);yy++)for(let xx=Math.max(0,i-r);xx<=Math.min(this.nx-1,i+r);xx++){
-            const near=yy*this.nx+xx;if(this.walkA[near]&&this.best[near]!==255){found=near;break;}
-          }
-          if(found>=0){this.best[k]=this.best[found];this.mask[k]=this.mask[found];}
-        }
-        this.walkA[k]=1;this.h[k]=Math.round(patch.floor*100);
-      }
-    }
+    this.bodyA = bodyImg ? Uint8Array.from({length:n},(_,k)=>bodyImg.data[k * bodyImg.ch] ? 1 : 0) : null;
     this.map = json.map;
     this.mapCells = json.map ? b64(json.map.cells, Uint8Array) : null;
     this.cameras = json.cameras.map(c => ({
@@ -71,10 +55,17 @@ export class Room {
   walkable(x, y) { const k = this.idx(x, y); return k >= 0 && this.walkA[k] === 1; }
   canStand(x, y, radius = 0.23) {
     if (!this.walkable(x,y)) return false;
+    // A human's legs can pass beside a low chair/table while the wider upper
+    // body must clear walls and tall furniture. Large creatures retain full size.
+    const footRadius=this.bodyA && radius<=.3 ? Math.min(radius,.14) : radius;
+    return this.clearDisk(x,y,footRadius,this.walkA,false) &&
+      (!this.bodyA || this.clearDisk(x,y,radius,this.bodyA,true));
+  }
+  clearDisk(x,y,radius,grid,solidValue) {
     const a=Math.floor((x-radius-this.x0)/this.res), b=Math.floor((x+radius-this.x0)/this.res);
     const c=Math.floor((y-radius-this.y0)/this.res), d=Math.floor((y+radius-this.y0)/this.res);
     for(let j=c;j<=d;j++) for(let i=a;i<=b;i++) {
-      if(i>=0&&j>=0&&i<this.nx&&j<this.ny&&this.walkA[j*this.nx+i])continue;
+      if(i>=0&&j>=0&&i<this.nx&&j<this.ny&&Boolean(grid[j*this.nx+i])!==solidValue)continue;
       const left=this.x0+i*this.res, bottom=this.y0+j*this.res;
       const dx=x-Math.max(left,Math.min(x,left+this.res)),dy=y-Math.max(bottom,Math.min(y,bottom+this.res));
       if(dx*dx+dy*dy < radius*radius-1e-8)return false;

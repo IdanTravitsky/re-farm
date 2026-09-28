@@ -45,7 +45,8 @@ export class Assets {
     if (!this.pending[id]) {
       this.pending[id] = (async () => {
         const json = await this.P.json('rooms/' + id + '.json');
-        const room = new Room(json, await this.png(json.grid.png));
+        const [grid,body] = await Promise.all([this.png(json.grid.png), json.grid.body_png ? this.png(json.grid.body_png) : null]);
+        const room = new Room(json, grid, body);
         if (!this.P.headless) await this.loadPlates(room);
         this.rooms[id] = room;
         delete this.pending[id];
