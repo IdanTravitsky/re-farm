@@ -65,6 +65,7 @@ export class Script {
       case 'flag': return on.flag === info.flag;
       case 'enemy_hp': return on.id === info.id && info.hp <= (on.below ?? 0);
       case 'enemy_dead': return on.id === info.id;
+      case 'enemy_land': return !on.id || on.id === info.id;     // a leaper off its perch, on its feet
       case 'unlock': return !on.door || on.door === info.door;
       case 'use_item': return (!on.item || on.item === info.item) && (!on.id || on.id === info.id);
       default: return true;
@@ -95,6 +96,8 @@ export class Script {
   start(actions, label = '') { const c = new Coroutine(actions, label); this.running.push(c); this.step(c); return c; }
 
   update(dt) {
+    const card = this.g.fx.card;                                   // a chapter's title card plays first; the scene waits for it
+    if (card && !card.inline && card.t < card.dur) return;
     for (const c of this.running) {
       if (c.done) continue;
       if (c.wait > 0) { c.wait -= dt; if (c.wait > 0) continue; c.wait = 0; }
@@ -153,6 +156,18 @@ export class Script {
       case 'chapter_end': g.chapterEnd(v); return 'stop';
       case 'goto_room': g.gotoRoom(v.room, v.at, v.yaw ?? 0, v.transition || 'fade'); break;
       case 'camera': g.forcedCamera = v; if (!v) g.cam = -1, g.updateCamera(); else g.updateCamera(); break;
+      case 'take_pickup': [].concat(v).forEach(id => { S.taken[id] = true; }); break;          // e.g. a set piece that is no longer there
+      case 'fall': [].concat(v).forEach(id => { const e = g.enemies.find(x => x.id === id); if (e) { e.state = 'fall'; e.vz = 0.5; e.scripted = null; } }); break;
+      case 'fall_rect': {                                       // everything standing on a part that gives way (the span) goes with it
+        const [x0, y0, x1, y1] = v;
+        for (const e of g.enemies) {
+          if (e.state === 'gone' || e.x < x0 || e.x > x1 || e.y < y0 || e.y > y1) continue;
+          Object.assign(e, { state: 'fall', vz: 0.5, scripted: null });
+          delete S.enemies[e.id]; if (S.corpses) delete S.corpses[e.id]; S.dead[e.id] = true;
+        }
+        break;
+      }
+      case 'frame': { const id = g.frameCamera(v); if (id) { g.forcedCamera = id; g.updateCamera(); } break; }   // the shot that shows it best
       case 'cinematic': g.cinematic = !!v; break;                // player input off, letterbox on
       case 'actor': {
         const act = v.id === 'player' ? g.player : g.enemies.find(e => e.id === v.id);
@@ -173,11 +188,16 @@ export class Script {
       case 'lock': [].concat(v).forEach(d => g.unlockDoor(d, false)); break;
       case 'infect': S.infection = Math.max(0, Math.min(100, (S.infection || 0) + v)); break;
       case 'infect_rate': S.infect_rate = v; break;
-      case 'wake': [].concat(v).forEach(id => { const e = g.enemies.find(x => x.id === id); if (e && e.state === 'perched') e.update(); if (e) { e.hidden = false; if (['idle', 'perched'].includes(e.state)) e.state = 'chase'; } }); break;
+      case 'wake': [].concat(v).forEach(id => {
+        const e = g.enemies.find(x => x.id === id);
+        if (e && e.state === 'perched') e.update();
+        if (e) { e.hidden = false; e.staticPose = null; e.poseName = undefined; e.cool = Math.max(e.cool || 0, 1.0); if (['idle', 'perched'].includes(e.state)) e.state = 'chase'; }   // up off the body, a beat before it lunges
+      }); break;
       case 'enemy': {
         const e = g.enemies.find(x => x.id === v.id);
         if (e && v.pose !== undefined) e.poseName = v.pose || undefined;
         if (e && v.hide) e.hide = new Set(v.hide);
+        if (e && v.lamps !== undefined) e.lampsOff = !v.lamps;
         if (e && v.pose !== undefined) e.staticPose = v.pose ? this.g.A.poses[e.def.model]?.[v.pose] || null : null;
         if (e) { if (v.hp !== undefined) e.hp = v.hp; if (v.state) { e.state = v.state; e.t = 0; if (v.anim) e.anim.play(v.anim, { restart: true }); } if (v.hidden !== undefined) e.hidden = v.hidden; }
         break;

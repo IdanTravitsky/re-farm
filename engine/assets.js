@@ -27,7 +27,7 @@ export class Assets {
     const P = this.P;
     this.content = await P.json('content.json');
     this.poses = await P.json('poses.json');
-    if (!P.headless) this.font = new Font(await this.image('font.png'), await P.json('font.json'));
+    this.font = new Font(await this.image('font.png'), await P.json('font.json'));   // headless too: text layout (paging) must match
     await Promise.all(this.content.models.map(m => this.model(m)));
     return this;
   }

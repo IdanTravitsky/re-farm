@@ -186,7 +186,7 @@ export function render(fb, cam, instances, lights, otBits = 12) {
   for (const inst of instances) {
     const m = inst.model;
     const s = (inst.scale || 1) * 0.001;
-    const Ry = rotXYZ(0, 0, inst.yaw || 0);
+    const Ry = rotXYZ(0, inst.roll || 0, inst.yaw || 0);            // roll: about the model's length (a wreck on its side)
     const world = mat4(Ry.map(v => v * s), [inst.x, inst.y, inst.z]);
     const mats = partMatrices(m, inst.pose || {});
     const L = inst.lights || lights;
@@ -260,13 +260,57 @@ export function render(fb, cam, instances, lights, otBits = 12) {
   }
 }
 
+// ---------------------------------------------------------------- moving lights on a plate
+// Lights that travel (car headlights) cannot be baked, so they are painted onto the
+// plate per frame: every pixel's world position comes back from its depth
+// (camera-space z), and a spot or point light brightens it with a range falloff.
+export function plateWorld(C) {
+  if (C.world) return C.world;
+  const m = C.cam.m, f = C.cam.f, D = C.depth, W = new Float32Array(320 * 240 * 3);
+  for (let y = 0; y < 240; y++) for (let x = 0; x < 320; x++) {
+    const i = y * 320 + x, d = D[i];
+    const qx = (x - 160) * d / f - m[3], qy = -(y - 120) * d / f - m[7], qz = -d - m[11];
+    W[i * 3] = m[0] * qx + m[4] * qy + m[8] * qz;
+    W[i * 3 + 1] = m[1] * qx + m[5] * qy + m[9] * qz;
+    W[i * 3 + 2] = m[2] * qx + m[6] * qy + m[10] * qz;
+  }
+  return (C.world = W);
+}
+// lamps: [{x, y, z, range, col:[r,g,b], power, dir?:[x,y,z] unit, cone?: half-angle deg}]
+export function paintLamps(fb, C, lamps) {
+  if (!lamps.length || !C.depth) return;
+  const W = plateWorld(C), px = fb.px;
+  for (const l of lamps) {
+    const r2 = l.range * l.range, spot = !!l.dir;
+    const cOut = spot ? Math.cos(l.cone * Math.PI / 180) : 0, cIn = spot ? Math.cos(l.cone * 0.55 * Math.PI / 180) : 0;
+    const [cr, cg, cb] = l.col, pw = l.power ?? 1;
+    for (let i = 0, n = 320 * 240; i < n; i++) {
+      const dx = W[i * 3] - l.x, dy = W[i * 3 + 1] - l.y, dz = W[i * 3 + 2] - l.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 > r2) continue;
+      const d = Math.sqrt(d2) + 1e-6;
+      let k = 1 - d / l.range; k *= (spot ? 1 : k) * pw;         // beams throw far; bulbs fall off fast
+      if (spot) {
+        const c = (dx * l.dir[0] + dy * l.dir[1] + dz * l.dir[2]) / d;
+        if (c < cOut) continue;
+        if (c < cIn) k *= (c - cOut) / (cIn - cOut);
+      }
+      // light what is there by its brightness (not per channel: that would blow the plate's
+      // colour noise up into confetti), in the lamp's colour, plus a little glow
+      const o = i * 4, lum = (px[o] * 0.3 + px[o + 1] * 0.55 + px[o + 2] * 0.15) * 2.6 * k + (spot ? 22 : 40) * k;     // beams: less flat glow, or dark asphalt turns brown
+      const r = px[o] * (1 + 0.4 * k) + lum * cr, g = px[o + 1] * (1 + 0.4 * k) + lum * cg, b = px[o + 2] * (1 + 0.4 * k) + lum * cb;
+      px[o] = (r > 255 ? 255 : r) & 0xF8; px[o + 1] = (g > 255 ? 255 : g) & 0xF8; px[o + 2] = (b > 255 ? 255 : b) & 0xF8;
+    }
+  }
+}
+
 // world position of a local point on a posed part (for muzzles, hit sparks)
 export function partPoint(inst, partName, local) {
   const m = inst.model;
   const pi = m.index[partName];
   const mats = partMatrices(m, inst.pose || {});
   const s = (inst.scale || 1) * 0.001;
-  const world = mat4(rotXYZ(0, 0, inst.yaw || 0).map(v => v * s), [inst.x, inst.y, inst.z]);
+  const world = mat4(rotXYZ(0, inst.roll || 0, inst.yaw || 0).map(v => v * s), [inst.x, inst.y, inst.z]);
   const M = mul4(world, mats[pi]);
   return xform(M, local[0], local[1], local[2]);
 }

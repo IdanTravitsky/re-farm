@@ -27,6 +27,19 @@ export const TRANSITIONS = {
   door_metal: swing('door_metal', 'door_metal', COLD, (o) => ({ leaf: [0, 0, 95 * o] })),
   door_double: swing('door_double', 'door', COLD, (o) => ({ leaf_l: [0, 0, 85 * o], leaf_r: [0, 0, -85 * o] }), 3.6, 1.2),
   gate: swing('gate', 'gate', NIGHT, (o) => ({ leaf: [0, 0, 90 * o] }), 6.0, 2.2),
+  gate_chain: swing('gate_chain', 'gate', NIGHT, (o) => ({ leaf: [0, 0, 95 * o] }), 3.6, 1.4),
+  door_wood: swing('door_wood', 'door', WARM, (o) => ({ leaf: [0, 0, 100 * o] })),
+  door_vault: { model: 'door_vault', sfx: 'door_metal', light: COLD,                    // spin the wheel, then heave it open
+    view: (t) => { const d = ease(cl(1.2, 2.6, t)); return [[0, -(3.2 - 1.8 * d), 1.3], [0, 0, 1.15]]; },
+    pose: (t) => ({ wheel: [0, 540 * ease(cl(0.1, 1.2, t)), 0], leaf: [0, 0, 80 * ease(cl(1.2, 2.2, t)) ** 2] }) },
+  loft_up: { model: 'ladder_wood', sfx: 'ladder', light: WARM, pose: () => ({}),
+    view: (t) => { const z = 0.9 + 3.6 * ease(cl(0.2, 2.6, t)); return [[0, -0.8, z], [0, 0.2, z + 0.5]]; } },
+  loft_down: { model: 'ladder_wood', sfx: 'ladder', light: WARM, pose: () => ({}),
+    view: (t) => { const z = 4.5 - 3.6 * ease(cl(0.2, 2.6, t)); return [[0, -0.8, z], [0, 0.2, z - 0.7]]; } },
+  shaft_up: { model: 'ladder_concrete', sfx: 'ladder', light: COLD, pose: () => ({}),
+    view: (t) => { const z = 0.9 + 3.6 * ease(cl(0.2, 2.6, t)); return [[0, -0.8, z], [0, 0.2, z + 0.5]]; } },
+  shaft_down: { model: 'ladder_concrete', sfx: 'ladder', light: COLD, pose: () => ({}),
+    view: (t) => { const z = 4.5 - 3.6 * ease(cl(0.2, 2.6, t)); return [[0, -0.8, z], [0, 0.2, z - 0.7]]; } },
   stairs_up: { model: 'stairs', sfx: 'stairs', light: COLD, pose: () => ({}),
     view: (t) => { const y = -1.2 + 4.4 * ease(cl(0.2, 2.6, t)), z = (v) => 0.643 * Math.max(0, v); const b = 0.03 * Math.sin(t * 11);
       return [[0.15, y, z(y) + 1.55 + b], [0, y + 2, z(y + 2) + 1.3]]; } },
@@ -78,6 +91,7 @@ export class Game {
     const yaw = start.face ? yawTo(start.at[0], start.at[1], start.face[0], start.face[1]) : 0;
     await this.enterRoom(start.room, start.at[0], start.at[1], yaw);
     this.mode = 'play'; this.t = 0;
+    if (this.location.card) this.titleCard(this.location.card);        // ROUTE SIX, like every later chapter
     this.script.fire('new_game');
   }
   async enterRoom(roomId, x, y, yaw, opts = {}) {
@@ -103,6 +117,7 @@ export class Game {
     p.anim.play('idle', { restart: true, fade: 0 }); p.updateHide();
     this.cam = -1; this.forcedCamera = null; this.flowField = null; this.particles = []; this.muzzle = null;
     this.projectiles = []; this.puddles = []; this.musicOverride = undefined;
+    this.fx.card = null;                                    // a title card belongs to the room it was shown in
     this.updateCamera();
     this.spawnRoomEnemies();
     this.updateMusic();
@@ -138,6 +153,11 @@ export class Game {
     if (old) old.state = 'gone';
     const e = new Enemy(this, s);
     this.enemies.push(e);
+    const p = this.player;
+    if (spec.clear && p && Math.hypot(p.x - e.x, p.y - e.y) < spec.clear) {    // something bursts out right where he stands: he stumbles back
+      const d = Math.hypot(p.x - e.x, p.y - e.y) || 1, k = spec.clear / d, nx = e.x + (p.x - e.x) * k, ny = e.y + (p.y - e.y) * k;
+      if (this.room.walkable(nx, ny)) { p.x = nx; p.y = ny; p.z = this.room.floor(nx, ny); }
+    }
     return e;
   }
   removeEnemy(id) {
@@ -161,16 +181,18 @@ export class Game {
     this.music.play(null);
   }
   async continueToNext() {
+    if (this.mode !== 'chapter') return;
+    this.mode = 'loading';                                  // before any await: a second ENTER must not start a second transition
     const loc = await this.A.location(this.chapter.next);
     const e = loc.entry || {};
     const room = e.room || loc.rooms[0];
-    this.mode = 'loading';
     this.state.pursuit = null;
     // a new chapter starts clean: the last one's cutscene state never leaks across
     this.script.running = []; this.cinematic = false; this.forcedCamera = null; this.musicOverride = undefined;
     Object.assign(this.fx, { fade: 0, fadeTo: 0, whiteout: 0, shake: 0, card: null });
     if (this.player) { this.player.hidden = false; this.player.scripted = null; }
     this.state.enemies = {}; this.state.corpses = {}; this.state.dead = {};   // actors belong to their chapter
+    this.enemies = [];          // or enterRoom stashes the last chapter's actors straight back (the trailer's "suv" hid the city's)
     await this.enterRoom(room, ...(e.at || [0, 0]), e.yaw || 0);
     this.mode = 'play'; this.t = 0;
     if (loc.card) this.titleCard(loc.card);
@@ -214,7 +236,7 @@ export class Game {
       if (!filter(c)) continue;
       const d = Math.hypot(c.at[0] - p.x, c.at[1] - p.y);
       if (d > c.r) continue;
-      if (d > 0.6 && Math.abs(angDiff(yawTo(p.x, p.y, c.at[0], c.at[1]), p.yaw)) > 75) continue;
+      if (d > 0.1 && Math.abs(angDiff(yawTo(p.x, p.y, c.at[0], c.at[1]), p.yaw)) > (d > 0.6 ? 75 : 115)) continue;   // never what's behind you
       // pickups / doors / typewriters win over plain examine text at the same spot
       // an item beats the typewriter beside it; flavour text loses to anything you can actually do
       const acts = c.kind !== 'examine' || c.ex.ask || c.ex.do || (c.ex.use && this.state.has(c.ex.use.item));
@@ -252,7 +274,8 @@ export class Game {
         if (def.kind === 'weapon' && !(S.equipped && S.has(S.equipped))) { S.equipped = pk.item; p.updateHide(); }   // empty hands take the gun
         S.taken[pk.id] = true;
         this.sfx('pickup');
-        if (pk.taken) this.ui.say(pk.taken);
+        const n = pk.count ?? 1;                                 // every pickup confirms what you got, like the originals
+        this.ui.say(pk.taken || [`You got the ${def.name}${n > 1 && def.kind !== 'weapon' ? ` x${n}` : ''}.`]);
         if (pk.do) this.script.start(pk.do, pk.id);
         this.script.fire('pickup', { id: pk.id });
       };
@@ -338,16 +361,70 @@ export class Game {
   updateCamera() {
     const p = this.player;
     if (this.forcedCamera) { const k = this.room.cameras.findIndex(c => c.id === this.forcedCamera); if (k >= 0) { this.cam = k; return; } }
-    const c = this.room.camera(p.x, p.y, this.cam);
+    let c = this.room.camera(p.x, p.y, this.cam);
+    // a fight is never shot from behind the lens: if something awake and close is out of the zone's
+    // shot, take another shot that sees this spot and both of them (held a beat, so it can't flicker)
+    this.combatHold = Math.max(0, (this.combatHold || 0) - DT);
+    if (this.combatHold > 0 && this.combatFoe?.alive() && this.inShot(this.combatCam, this.combatFoe) && this.inShot(this.combatCam, p)) c = this.combatCam;
+    else if (c >= 0) {
+      // the foe: whatever he is aiming at, else the nearest awake hostile that can see him (a spitter 15 m off counts)
+      let foe = p.target && p.target.alive?.() && ['aim', 'fire'].includes(p.mode) ? p.target : null, fd = 20;
+      if (!foe) for (const e of this.enemies) {
+        if (!e.hostile() || e.hidden || ['idle', 'perched'].includes(e.state)) continue;
+        const d = Math.hypot(e.x - p.x, e.y - p.y);
+        if (d < fd && (d < 9 || this.room.los(p.x, p.y, e.x, e.y, 0.3))) { fd = d; foe = e; }
+      }
+      if (foe && !this.inShot(c, foe)) {
+        const R = this.room, k = R.idx(p.x, p.y), mask = k >= 0 ? R.mask[k] : 0;
+        let best = -1, bs = -1;
+        R.cameras.forEach((C, i) => {
+          if (!((mask >> i) & 1) || !this.inShot(i, p) || !this.inShot(i, foe)) return;
+          const s = Math.min(this.shotSize(i, p), 75) + Math.min(this.shotSize(i, foe), 60);
+          if (s > bs) { bs = s; best = i; }
+        });
+        if (best >= 0) { c = best; this.combatCam = best; this.combatFoe = foe; this.combatHold = 1.5; }
+      }
+    }
     if (c >= 0 && c !== this.cam) { this.cam = c; this.flowField = null; }
     if (this.cam < 0) this.cam = 0;
+  }
+  // is an actor on screen in camera i (head and feet framed, chest not behind the set)?
+  inShot(i, a) {
+    const C = this.room.cameras[i]; if (!C) return false;
+    const f = C.cam.project(a.x, a.y, a.z + 0.1), m = C.cam.project(a.x, a.y, a.z + 1.0), t = C.cam.project(a.x, a.y, a.z + 1.6);
+    if (!f || !m || !t || m[0] < 8 || m[0] > 312 || t[1] < 2 || f[1] > 238) return false;
+    return !C.depth || m[2] <= C.depth[(m[1] | 0) * 320 + (m[0] | 0)] + 0.4;
+  }
+  shotSize(i, a) {
+    const C = this.room.cameras[i], f = C.cam.project(a.x, a.y, a.z), t = C.cam.project(a.x, a.y, a.z + 1.7);
+    return f && t ? f[1] - t[1] : 0;
+  }
+  // the room camera (cutscene shots included) that shows a point or actor largest, in frame and
+  // not hidden behind the set: {actor: id} or {at: [x, y]}, optional {height} (default 1.7 m)
+  frameCamera(v) {
+    const R = this.room, a = v.actor === 'player' ? this.player : v.actor ? this.enemies.find(e => e.id === v.actor) : null;
+    const [x, y] = a ? [a.x, a.y] : v.at || [this.player.x, this.player.y];
+    const z = a ? a.z : R.floor(x, y), h = v.height ?? 1.7;
+    let best = null, bs = -1;
+    for (const C of R.cameras) {
+      const f = C.cam.project(x, y, z + 0.1), t = C.cam.project(x, y, z + h), m = C.cam.project(x, y, z + h * 0.55);
+      if (!f || !t || !m) continue;
+      if (m[0] < 40 || m[0] > 280 || t[1] < 30 || m[1] > 168) continue;     // head below the letterbox, chest above the message box
+      const k = (m[1] | 0) * 320 + (m[0] | 0);
+      if (C.depth && m[2] > C.depth[k] + 0.4) continue;                  // behind a wall in this shot
+      if (v.with && !this.inShot(R.cameras.indexOf(C), v.with === 'player' ? this.player : this.enemies.find(e => e.id === v.with))) continue;   // a two-shot
+      const size = Math.min(f[1] - t[1], 150) - Math.abs(m[0] - 160) * 0.15;   // big, and near the middle
+      if (size > bs) { bs = size; best = C.id; }
+    }
+    return bs >= 30 ? best : null;                                   // never cut to a speck: keep the shot you have
   }
   prefetchVisited() { for (const r of this.location.rooms) if (this.state.visited[r]) this.A.prefetch(r); }
   // the room's track, unless a script overrides it or something is hunting you
   updateMusic() {
     if (!this.room) return;
     const hunter = this.enemies.find(e => e.def.chase_music && e.hostile() && e.state !== 'idle');
-    const want = hunter ? hunter.def.chase_music : this.musicOverride !== undefined ? this.musicOverride : this.room.music;
+    const p = this.player, zone = p && this.room.musicZones.find(z => p.x >= z.rect[0] && p.x <= z.rect[2] && p.y >= z.rect[1] && p.y <= z.rect[3]);
+    const want = hunter ? hunter.def.chase_music : this.musicOverride !== undefined ? this.musicOverride : zone ? zone.music : this.room.music;   // a save corner has its own track
     this.music.play(want);
   }
 
@@ -416,6 +493,11 @@ export class Game {
   onEnemyDead(e) {
     const S = this.state;
     S.dead[e.id] = true; S.stats.kills++; delete S.enemies[e.id];
+    const p = this.player, dx = e.x - p.x, dy = e.y - p.y, d = Math.hypot(dx, dy);
+    if (!e.def.no_corpse && d < 0.75) {                      // it died on top of him (a leaper's pounce): the body lands clear
+      const k = d > 0.01 ? 0.75 / d : 0, nx = p.x + (d > 0.01 ? dx * k : Math.sin(p.yaw * Math.PI / 180) * 0.75), ny = p.y + (d > 0.01 ? dy * k : -Math.cos(p.yaw * Math.PI / 180) * 0.75);
+      if (this.room.walkable(nx, ny)) { e.x = nx; e.y = ny; e.z = this.room.floor(nx, ny); }
+    }
     if (!e.def.no_corpse) (S.corpses ||= {})[e.id] = { type: e.type, room: e.room || S.room, at: [e.x, e.y], yaw: e.yaw };
     this.script.fire('enemy_dead', { id: e.id });
   }
@@ -436,6 +518,13 @@ export class Game {
     for (let i = 0; i < all.length; i++) for (let j = i + 1; j < all.length; j++) {
       const a = all[i], b = all[j], dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), m = a.r + b.r;
       if (d > 0 && d < m) { const k = (m - d) / d * 0.5; b.move(dx * k, dy * k); a.move(-dx * k, -dy * k); }
+    }
+    // solid set pieces (actors.json "solid": a heap, a gurney): immovable, they push you out
+    const p = this.player;
+    for (const e of this.enemies) {
+      if (!e.def.solid || e.state === 'gone' || e.hidden) continue;
+      const dx = p.x - e.x, dy = p.y - e.y, d = Math.hypot(dx, dy), m = p.r + (e.def.radius || 0.5);
+      if (d > 0 && d < m) p.move(dx * (m - d) / d, dy * (m - d) / d);
     }
   }
 
@@ -492,6 +581,7 @@ export class Game {
     const S = this.state, p = this.player;
     S.time += DT;
     if (this.ui.update(I)) return;                            // messages / menu / files pause the world
+    if (this.fx.card) I = { ...I, confirmPressed: false, actionPressed: false, menuPressed: false, mapPressed: false };   // a chapter card is up: look, don't touch
     if (!this.cinematic && p.mode !== 'dead' && p.mode !== 'grabbed') {
       if (I.menuPressed) return this.ui.openMenu('items');
       if (I.mapPressed) return this.ui.openMenu('map');
@@ -499,6 +589,7 @@ export class Game {
     if (S.infect_rate && p.mode !== 'dead') S.infection = Math.min(100, (S.infection || 0) + S.infect_rate * DT);
     p.update(I);
     for (const e of this.enemies) e.update();
+    this.room.blocks = (this.location.nowalk || []).filter(n => n.room === S.room && check(n.when, this)).map(n => n.rect);   // location "nowalk": [{room, rect, when}]
     this.separate();
     this.updateCamera();
     this.updateProjectiles();
@@ -538,19 +629,71 @@ export class Game {
     }
     if (this.debug) this.debug.draw();
   }
+  // lights carried by actors (actors.json "lamps": car headlights, tail lights), in world space.
+  // at: [ahead, right, up] metres from the actor; cone: spot half-angle (omit for a point light)
+  lamps() {
+    const out = [];
+    for (const e of this.enemies) {
+      const L = e.def?.lamps;
+      if (!L || e.state === 'gone' || e.hidden || e.lampsOff) continue;
+      const f = fwd(e.yaw), rt = [-f[1], f[0]];
+      for (const l of L) {
+        if (l.blink && Math.floor(this.time / l.blink[0] + l.blink[1]) % 2) continue;     // light bars alternate
+        const [a, s, z] = l.at, tilt = l.tilt ?? -0.1, n = Math.hypot(1, tilt);
+        out.push({ owner: e, x: e.x + f[0] * a + rt[0] * s, y: e.y + f[1] * a + rt[1] * s, z: e.z + z,
+          dir: l.cone ? [f[0] / n, f[1] / n, tilt / n] : null, cone: l.cone, range: l.range, col: l.color, power: l.power, self: l.self });
+      }
+    }
+    return out;
+  }
+  // the B7 cooler hangs from Bryan's left hand by its handle, swinging with the walk; it's
+  // shifted onto his back (not drawn) while he holds a gun up in both hands
+  carried(pi) {
+    const p = this.player, S = this.state, m = this.A.models.package;
+    if (!m || !S.held?.package || ['aim', 'fire', 'grabbed', 'dead'].includes(p.mode)) return [];
+    const h = PSX.partPoint(pi, 'hand_l', [30, 0, -70]);
+    return [{ model: m, x: h[0], y: h[1], z: h[2] - 0.35, yaw: p.yaw + 90, pose: {}, lights: pi.lights }];
+  }
+  // pickups with no pre-rendered sprite (not modelled in the scene) lie on the floor as their
+  // item model; ones tucked inside something (a glovebox, a pocket) stay unseen
+  floorItems() {
+    const R = this.room, S = this.state, out = [];
+    R.spritePicks ||= new Set(R.cameras.flatMap(c => c.sprites.map(s => s.pickup)));
+    for (const pk of this.location.pickups || []) {
+      if (pk.room !== S.room || S.taken[pk.id] || pk.inside || R.spritePicks.has(pk.id) || !check(pk.when, this)) continue;
+      const def = this.A.content.items[pk.item], model = this.A.models[def?.model];
+      if (!model) continue;
+      const [x, y] = pk.at, z = pk.z ?? R.floor(...R.nearestWalkable(x, y, 1.5));
+      const yaw = ((pk.id.length * 67 + pk.id.charCodeAt(0) * 13) % 360);          // fixed, but not all lined up
+      out.push({ model, x, y, z, yaw, pose: this.A.poses[def.model]?.ground || {}, lights: R.lightsFor(this.cam, x, y, z - 0.8, 0.12, this.lampList) });
+    }
+    return out;
+  }
   drawWorld() {
     const fb = this.fb, R = this.room, C = R.cameras[this.cam], S = this.state;
     if (C.plate) fb.blit(C.plate.px); else fb.fill(0, 0, 0);
     fb.depth = C.depth;
+    this.lampList = this.lamps();
+    PSX.paintLamps(fb, C, this.lampList);
     for (const s of C.sprites) if (s.img && !S.taken[s.pickup]) PSX.blitSprite(fb, s.img, s.x, s.y);
     const boost = this.muzzle ? 0.5 : 0;
     const inst = this.player.hidden ? [] : [this.player.instance(this.cam, boost)];
-    for (const e of this.enemies) if (e.state !== 'gone' && !e.hidden) inst.push(e.instance(this.cam, boost * 0.6));
+    if (inst.length) inst.push(...this.carried(inst[0]));
+    inst.push(...this.floorItems());
+    for (const e of this.enemies) if (e.state !== 'gone' && !e.hidden && !e.def.invisible) inst.push(e.instance(this.cam, boost * 0.6));   // invisible: just a light source
     const cam = this.fx.shake > 0 ? shaken(C.cam, this.fx.shake) : C.cam;
     PSX.render(fb, cam, inst, null);
     if (this.muzzle && inst.length) {
       const m = this.muzzle.muzzle, c = Math.cos(m.rot * D2R), s = Math.sin(m.rot * D2R), L = m.local;
       const w = PSX.partPoint(inst[0], this.muzzle.part, [L[0], L[1] * c - L[2] * s, L[1] * s + L[2] * c]);
+      const pr = cam.project(w[0], w[1], w[2]);
+      if (pr) star(fb, pr[0] | 0, pr[1] | 0, m.size);
+    }
+    for (const e of this.enemies) {                                  // companions firing: the flash, not just the bang
+      if (!(e.muzzleT > 0) || e.model.index?.pistol === undefined) continue;
+      e.muzzleT--;
+      const m = this.A.content.items.pistol.weapon.muzzle, c = Math.cos(m.rot * D2R), s = Math.sin(m.rot * D2R), L = m.local;
+      const w = PSX.partPoint(e.instance(this.cam), 'pistol', [L[0], L[1] * c - L[2] * s, L[1] * s + L[2] * c]);
       const pr = cam.project(w[0], w[1], w[2]);
       if (pr) star(fb, pr[0] | 0, pr[1] | 0, m.size);
     }

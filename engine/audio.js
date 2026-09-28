@@ -84,6 +84,7 @@ export const sfx = {
   cursor() { if (!ctx) return; tone(now(), 0.05, { type: 'square', f0: 1200, gain: 0.06 }); },
   confirm() { if (!ctx) return; const t = now(); tone(t, 0.08, { type: 'square', f0: 880, gain: 0.08 }); tone(t + 0.07, 0.1, { type: 'square', f0: 1320, gain: 0.08 }); },
   heal() { if (!ctx) return; const t = now(); noise(t, 0.6, { type: 'highpass', f0: 4000, f1: 6000, gain: 0.25, attack: 0.05 }); },
+  hiss() { if (!ctx) return; const t = now(); noise(t, 2.2, { type: 'bandpass', f0: 3800, f1: 2600, q: 0.7, gain: 0.22, attack: 0.25 }); },   // decontamination spray
   squelch() { if (!ctx) return; const t = now(); for (let i = 0; i < 4; i++) noise(t + i * 0.18, 0.25, { type: 'lowpass', f0: 600, f1: 120, gain: 0.4 }); tone(t, 1.6, { type: 'sawtooth', f0: 50, f1: 35, gain: 0.3, attack: 0.3 }); },
   heartbeat() { if (!ctx) return; const t = now(); tone(t, 0.12, { f0: 60, f1: 40, gain: 0.5 }); tone(t + 0.22, 0.12, { f0: 55, f1: 38, gain: 0.35 }); },
   sting() { if (!ctx) return; const t = now(); tone(t, 1.8, { type: 'sawtooth', f0: 110, gain: 0.15, attack: 0.01 }); tone(t, 1.8, { type: 'sawtooth', f0: 116.5, gain: 0.15, attack: 0.01 }); noise(t, 1.2, { type: 'highpass', f0: 3000, f1: 800, gain: 0.3 }); },

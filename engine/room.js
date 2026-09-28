@@ -9,12 +9,15 @@ function b64(s, Type) {
   return new Type(u8.buffer);
 }
 
+// world position of a camera from its world-to-camera matrix (eye = -R^T t)
+const camEye = (m) => [-(m[0] * m[3] + m[4] * m[7] + m[8] * m[11]), -(m[1] * m[3] + m[5] * m[7] + m[9] * m[11]), -(m[2] * m[3] + m[6] * m[7] + m[10] * m[11])];
+
 const N8 = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
 
 export class Room {
   // json: rooms/<id>.json; gridImg: its decoded packed-grid PNG ({w, h, ch: 3, data})
   constructor(json, gridImg) {
-    Object.assign(this, { id: json.id, location: json.location, name: json.name, music: json.music, wind: json.wind || 0 });
+    Object.assign(this, { id: json.id, location: json.location, name: json.name, music: json.music, wind: json.wind || 0, musicZones: json.music_zones || [] });
     const g = json.grid;
     Object.assign(this, { x0: g.x0, y0: g.y0, res: g.res, nx: g.nx, ny: g.ny });
     const n = g.nx * g.ny, D = gridImg.data, b1 = n * 3, b2 = n * 6;
@@ -47,7 +50,12 @@ export class Room {
     const i = Math.floor((x - this.x0) / this.res), j = Math.floor((y - this.y0) / this.res);
     return i < 0 || j < 0 || i >= this.nx || j >= this.ny ? -1 : j * this.nx + i;
   }
-  walkable(x, y) { const k = this.idx(x, y); return k >= 0 && this.walkA[k] === 1; }
+  walkable(x, y) {
+    const k = this.idx(x, y);
+    if (k < 0 || this.walkA[k] !== 1) return false;
+    for (const [x0, y0, x1, y1] of this.blocks || []) if (x >= x0 && x <= x1 && y >= y0 && y <= y1) return false;   // gone (a fallen span)
+    return true;
+  }
   floor(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.h[k] / 100; }          // sets may sit below ground (interiors)
   surface(x, y) { const k = this.idx(x, y); return k < 0 ? 0 : this.surf[k]; }
 
@@ -150,13 +158,24 @@ export class Room {
     return b;
   }
   // per-character lights for a camera: point-ish lights evaluated at the character
-  lightsFor(ci, x, y, z, boost = 0) {
+  lightsFor(ci, x, y, z, boost = 0, lamps = null) {
     const L = this.cameras[ci].lights;
     const dirs = [], cols = [];
     for (const [p, c, range] of L.pts) {
       const d = [x - p[0], y - p[1], (z + 1.0) - p[2]];
       const k = range ? Math.max(0.25, Math.min(1.25, range / (Math.hypot(...d) + 0.5))) : 1;
-      dirs.push(d); cols.push(c.map(v => v * k));
+      const lum = c[0] * 0.3 + c[1] * 0.55 + c[2] * 0.15;           // a set's coloured light tints a face, it doesn't dye it (the green EXIT sign)
+      dirs.push(d); cols.push(c.map(v => (lum + (v - lum) * 0.6) * k));
+    }
+    const eye = this.cameras[ci].eye || (this.cameras[ci].eye = camEye(this.cameras[ci].cam.m));
+    dirs.push([x - eye[0], y - eye[1], (z + 1.2) - eye[2]]);       // a soft fill from the lens: never a black silhouette
+    cols.push(L.fill || [0.2, 0.2, 0.23]);
+    for (const l of lamps || []) {                               // moving lamps: only inside their beam
+      const d = [x - l.x, y - l.y, (z + 1.0) - l.z], dist = Math.hypot(...d);
+      if (dist > l.range || dist < 0.3) continue;
+      let k = (1 - dist / l.range) * 1.6 * (l.power ?? 1);
+      if (l.dir) { const c = (d[0] * l.dir[0] + d[1] * l.dir[1] + d[2] * l.dir[2]) / dist, co = Math.cos(l.cone * Math.PI / 180); if (c < co) continue; k *= Math.min(1, (c - co) / (1 - co) * 2); }
+      dirs.push(d); cols.push(l.col.map(v => v * k));
     }
     return new Lights(dirs, cols, L.amb.map(v => v + boost));
   }

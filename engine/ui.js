@@ -12,8 +12,18 @@ export class UI {
   get items() { return this.g.A.content.items; }
 
   // ---------------------------------------------------------------- messages
-  say(lines, then, who) { this.msg = { lines: [].concat(lines), shown: 0, page: 0, then, who }; }
-  ask(q, yes, no) { this.msg = { lines: [q], shown: 0, page: 0, choice: 0, yes, no }; }
+  // a page holds 3 wrapped lines (2 when YES/NO sits under it); longer text flows onto more pages
+  paginate(text, max = 3) {
+    const L = this.wrap(text, 290), out = [];
+    for (let i = 0; i < L.length; i += max) out.push(L.slice(i, i + max).join(' '));
+    return out.length ? out : [''];
+  }
+  say(lines, then, who) { this.msg = { lines: [].concat(lines).flatMap(l => this.paginate(l)), shown: 0, page: 0, then, who }; }
+  ask(q, yes, no) {
+    const pages = this.paginate(q, 2);
+    if (pages.length > 1) return this.say(pages.slice(0, -1), () => this.ask(pages[pages.length - 1], yes, no));
+    this.msg = { lines: pages, shown: 0, page: 0, choice: 0, yes, no };
+  }
   readFile(id, page = 0) { this.file = { id, page }; }
   modal() { return !!(this.msg || this.file || this.menu || this.movie || this.boxUI); }
 
@@ -82,7 +92,11 @@ export class UI {
       if (I.leftPressed || I.rightPressed) { M.sel ^= 1; g.sfx('cursor'); }
       if (I.upPressed) { M.sel = (M.sel + n - 2) % n; g.sfx('cursor'); }
       if (I.downPressed) { M.sel = (M.sel + 2) % n; g.sfx('cursor'); }
-      if (I.confirmPressed) { const a = M.combine; M.combine = null; if (S.inventory[M.sel] && M.sel !== a) this.combine(a, M.sel); else g.sfx('cursor'); }
+      if (I.confirmPressed) {                                    // a stack can be mixed with itself (two green herbs in one slot)
+        const a = M.combine, it = S.inventory[M.sel]; M.combine = null;
+        const self = M.sel === a && it && it.n >= 2 && this.recipes().some(r => r[0] === it.id && r[1] === it.id);
+        if (it && (M.sel !== a || self)) this.combine(a, M.sel); else g.sfx('cursor');
+      }
       return;
     }
     if (M.sub) {
@@ -213,8 +227,9 @@ export class UI {
     if (k <= 0) return;
     const col = (v) => [v[0] * k, v[1] * k, v[2] * k];
     PSX.darken(this.fb, 1 - 0.45 * k);
-    this.center(c.text, 104, col([235, 230, 220]), 2);
-    if (c.sub) this.center(c.sub, 132, col([190, 40, 30]));
+    const big = this.F.width(c.text) * 2 <= 304;                   // long names drop to 1x rather than run off
+    this.center(c.text, big ? 104 : 110, col([235, 230, 220]), big ? 2 : 1);
+    if (c.sub) this.wrap(c.sub, 300).forEach((l, i) => this.center(l, 132 + i * 13, col([190, 40, 30])));
   }
 
   fileList() {
@@ -238,6 +253,13 @@ export class UI {
     if (cur) lines.push(cur);
     return lines;
   }
+  // wrap to the narrowest width that still needs no extra lines: even lines, no one-word orphans
+  balanced(text, max) {
+    const n = this.wrap(text, max).length;
+    let w = Math.ceil(this.F.width(text) / n);
+    while (w < max && this.wrap(text, w).length > n) w += 4;
+    return this.wrap(text, Math.min(w, max));
+  }
   center(s, y, col = WHITE, scale = 1) { this.F.draw(this.fb, s, 160 - (this.F.width(s) * scale >> 1), y, col, scale); }
 
   drawOverlays() {
@@ -247,15 +269,15 @@ export class UI {
     else if (this.msg) this.drawMsg();
   }
   drawMsg() {
-    const m = this.msg, F = this.F;
-    this.box(8, 186, 304, 48);
-    if (m.who) { const w = F.width(m.who) + 12; this.box(8, 172, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, m.who, 14, 175, GOLD); }
+    const m = this.msg, F = this.F, over = this.menu || this.boxUI, dy = over ? -8 : 0;     // over a menu: in its description strip, above the tabs
+    this.box(8, 186 + dy, 304, over ? 40 : 48, [0, 0, 0], over ? 0.97 : 0.85);
+    if (m.who) { const w = F.width(m.who) + 12; this.box(8, 172 + dy, w, 15, [0, 0, 0], 0.9); F.draw(this.fb, m.who, 14, 175 + dy, GOLD); }
     const lines = this.wrap(m.lines[m.page].slice(0, Math.floor(m.shown)), 290);
-    lines.slice(0, 3).forEach((l, i) => F.draw(this.fb, l, 16, 191 + i * 13));
+    lines.slice(0, 3).forEach((l, i) => F.draw(this.fb, l, 16, 191 + dy + i * 13));
     if (m.choice !== undefined && m.shown >= m.lines[m.page].length) {
-      F.draw(this.fb, 'YES', 110, 218, m.choice === 0 ? [255, 230, 120] : [140, 140, 140]);
-      F.draw(this.fb, 'NO', 190, 218, m.choice === 1 ? [255, 230, 120] : [140, 140, 140]);
-      F.draw(this.fb, '>', m.choice === 0 ? 100 : 180, 218, [255, 230, 120]);
+      F.draw(this.fb, 'YES', 110, 218 + dy, m.choice === 0 ? [255, 230, 120] : [140, 140, 140]);
+      F.draw(this.fb, 'NO', 190, 218 + dy, m.choice === 1 ? [255, 230, 120] : [140, 140, 140]);
+      F.draw(this.fb, '>', m.choice === 0 ? 100 : 180, 218 + dy, [255, 230, 120]);
     }
   }
   drawFile() {
@@ -264,7 +286,9 @@ export class UI {
     this.box(30, 24, 260, 180, [58, 52, 40], 0.95, [120, 104, 80]);
     F.draw(fb, doc.title, 44, 32, [230, 200, 140]);
     F.draw(fb, pg[0], 44, 54, [220, 200, 160]);
-    pg.slice(1).forEach((l, i) => F.draw(fb, l, 44, 76 + i * 16, [220, 214, 196]));
+    const paras = pg.slice(1).join('\n').split(/\n\s*\n/).map(t => t.replace(/\s+/g, ' ').trim());   // hand-broken lines reflow; a blank line is a break
+    const body = paras.flatMap((t, i) => [...(i ? [''] : []), ...(t ? this.wrap(t, 240) : [])]), step = body.length > 7 ? 13 : 16;
+    body.forEach((l, i) => F.draw(fb, l, 44, 76 + i * step, [220, 214, 196]));
     F.draw(fb, `${f.page + 1}/${doc.pages.length}`, 250, 186, [160, 150, 130]);
   }
   drawMenu() {
@@ -323,32 +347,33 @@ export class UI {
       PSX.blitSprite(fb, this.icon(S.equipped), 16, 108);
       F.draw(fb, w.ammo ? `${S.mag[S.equipped] ?? 0} / ${S.count(w.ammo)}` : `${S.mag[S.equipped] ?? 0}`, 90, 126, [230, 230, 120]);
     }
-    F.draw(fb, g.room.name, 10, 158, [170, 170, 160]);
+    F.draw(fb, g.room.name, 10, 154, [170, 170, 160]);
     const held = Object.keys(S.held || {}).map(id => this.items[id]?.name).filter(Boolean);
-    if (held.length) F.draw(fb, 'CARRYING: ' + held.join(', '), 10, 170, [120, 200, 170]);
+    if (held.length) F.draw(fb, 'CARRYING: ' + held.join(', '), 10, 166, [120, 200, 170]);
     // item grid (2 x rows)
     for (let k = 0; k < g.slots; k++) {
-      const x = 170 + (k % 2) * 72, y = 8 + Math.floor(k / 2) * 44;
-      this.box(x, y, 68, 42, [0, 0, 0], 0.9, k === M.sel ? [255, 220, 90] : [110, 110, 104]);
+      const x = 170 + (k % 2) * 72, y = 8 + Math.floor(k / 2) * 42;      // four rows end above the description strip
+      this.box(x, y, 68, 40, [0, 0, 0], 0.9, k === M.sel ? [255, 220, 90] : [110, 110, 104]);
       const it = S.inventory[k];
       if (!it) continue;
       PSX.blitSprite(fb, this.icon(it.id), x + 2, y - 1);
       const def = this.items[it.id];
       if (def.kind !== 'file' && def.kind !== 'key' && def.kind !== 'tool') F.draw(fb, String(def.weapon ? S.mag[it.id] ?? 0 : it.n), x + 52, y + 28, [230, 230, 120]);
-      if (M.combine === k) this.box(x + 1, y + 1, 66, 40, [0, 0, 0], 0, [120, 220, 255]);
+      if (M.combine === k) this.box(x + 1, y + 1, 66, 38, [0, 0, 0], 0, [120, 220, 255]);
       if (S.equipped === it.id) F.draw(fb, 'E', x + 4, y + 28, [120, 220, 255]);
     }
     this.box(8, 180, 304, 42, [0, 0, 0], 0.9);
     const it = S.inventory[M.sel];
-    if (it) {
+    if (it && !this.msg) {                                           // a message box takes this strip over
       const def = this.items[it.id];
       F.draw(fb, def.name, 16, 183, GOLD);
       this.wrap(def.desc, 290).slice(0, 2).forEach((l, i) => F.draw(fb, l, 16, 196 + i * 12));
     }
     if (M.combine !== undefined && M.combine !== null) F.draw(fb, 'COMBINE WITH?', 170, 170, GOLD);
     if (M.sub) {
-      const x = 170 + (M.sel % 2) * 72 + 30, y = 8 + Math.floor(M.sel / 2) * 44 + 8;
-      this.box(x, y, 60, 8 + M.sub.opts.length * 13, [20, 20, 30], 0.97, [255, 220, 90]);
+      const bw = 12 + Math.max(...M.sub.opts.map(o => F.width(o)));
+      const x = Math.min(170 + (M.sel % 2) * 72 + 30, 316 - bw), y = 8 + Math.floor(M.sel / 2) * 42 + 8;   // stays on screen
+      this.box(x, y, bw, 8 + M.sub.opts.length * 13, [20, 20, 30], 0.97, [255, 220, 90]);
       M.sub.opts.forEach((o, i) => F.draw(fb, o, x + 8, y + 4 + i * 13, i === M.sub.sel ? [255, 230, 120] : [180, 180, 170]));
     }
   }
@@ -441,7 +466,9 @@ export class UI {
       for (let y = 0; y < 44; y++) PSX.rect(fb, 0, y, 64, 1, 10 + y / 3, 12 + y / 3, 24 + y / 2);   // dim backdrop, like the originals
       const gun = !!def.weapon;
       PSX.render(fb, framed(m, 64, 44, gun ? -90 : -30, gun ? 1.05 : 1.0, gun ? 0.15 : 0.45), [{ model: m, x: 0, y: 0, z: 0, yaw: 0, pose: {} }],
-        new PSX.Lights([[0.5, 0.7, -0.6], [-0.6, -0.2, -0.2]], [[0.9, 0.88, 0.8], [0.3, 0.32, 0.4]], [0.45, 0.45, 0.48]));
+        gun ? new PSX.Lights([[0.3, 0.5, -0.8], [-0.6, -0.2, -0.4]], [[1.3, 1.25, 1.15], [0.55, 0.58, 0.7]], [0.9, 0.9, 0.95])   // dark gunmetal needs more light
+          : new PSX.Lights([[0.5, 0.7, -0.6], [-0.6, -0.2, -0.2]], [[0.9, 0.88, 0.8], [0.3, 0.32, 0.4]], [0.45, 0.45, 0.48]));
+      for (let i = 3; i < fb.px.length; i += 4) fb.px[i] = 255;       // opaque: the rasteriser never writes alpha, and blitSprite alpha-tests
       this.icons[id] = fb;
     }
     return this.icons[id];
@@ -465,7 +492,7 @@ export class UI {
       .forEach((l, i) => this.center(l, 188 + i * 13, GREY));
   }
   drawIntro(t) {
-    const fb = this.fb, lines = this.g.A.content.game.intro;
+    const fb = this.fb, lines = (this._intro ||= this.g.A.content.game.intro.flatMap(l => l ? this.wrap(l, 300) : ['']));
     fb.fill(0, 0, 0);
     const shown = Math.floor(t * 40);
     let n = 0;
@@ -500,8 +527,11 @@ export class UI {
     const fb = this.fb, S = this.g.state;
     PSX.darken(fb, Math.max(0, 1 - t / 2));
     if (t < 2) return;
-    ch.text.forEach((l, i) => this.center(l, 30 + i * 15, [200, 196, 186]));
-    const y = 40 + ch.text.length * 15;
+    const lines = (ch._lines ||= ch.text.join('\n').split(/\n\s*\n/).flatMap((t, i) =>   // paragraphs ('' in the text), each balanced
+      [...(i ? [''] : []), ...this.balanced(t.replace(/\s+/g, ' ').trim(), 300)]));
+    const top = Math.max(14, 30 - Math.max(0, lines.length - 6) * 7), step = lines.length > 8 ? 13 : 15;
+    lines.forEach((l, i) => this.center(l, top + i * step, [200, 196, 186]));
+    const y = top + 10 + lines.length * step;
     const t2 = Math.floor(S.time), tm = `${Math.floor(t2 / 3600)}:${String(Math.floor(t2 / 60) % 60).padStart(2, '0')}:${String(t2 % 60).padStart(2, '0')}`;
     if (ch.final) {                                                   // RE-style results and rank
       this.center('THE END', y, [200, 20, 20], 2);
@@ -514,7 +544,7 @@ export class UI {
       return;
     }
     this.center(ch.hasNext ? 'THE JOURNEY CONTINUES' : 'TO BE CONTINUED', y, [200, 20, 20]);
-    this.center(`Time ${tm}    Shots ${S.stats.shots}    Kills ${S.stats.kills}    Saves ${S.saves}`, y + 22, [170, 166, 150]);
+    this.center(`TIME ${tm}   SHOTS ${S.stats.shots}   KILLS ${S.stats.kills}   SAVES ${S.saves}`, y + 22, [170, 166, 150]);
     if (t > 4) this.center('PRESS ENTER', y + 46, [120, 120, 120]);
   }
 }

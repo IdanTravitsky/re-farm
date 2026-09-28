@@ -55,7 +55,7 @@ class Actor {
     if (!s.move_to) { this.anim.update(DT); return !!s.hold; }
     const [tx, ty] = s.move_to, d = Math.hypot(tx - this.x, ty - this.y);
     if (d < 0.2) { this.arrived = true; this.scripted = s.hold ? { hold: true } : null; if (!s.keep_anim) this.anim.play(s.then || 'idle'); return true; }
-    if (!s.keep_yaw) this.yaw = yawTo(this.x, this.y, tx, ty);
+    if (!s.keep_yaw) { if (s.turn) turnTo(this, yawTo(this.x, this.y, tx, ty), s.turn); else this.yaw = yawTo(this.x, this.y, tx, ty); }   // vehicles steer
     const f0 = fwd(yawTo(this.x, this.y, tx, ty));
     const sp = (s.speed || (s.run ? 3.0 : 1.3)) * DT, f = fwd(this.yaw);
     const x0 = this.x, y0 = this.y;
@@ -69,7 +69,7 @@ class Actor {
   instance(ci, boost = 0) {
     const pose = wiggle(this.staticPose || this.anim.pose(), this.model, this.g.time, this.wig);
     return { model: this.model, x: this.x, y: this.y, z: this.z, yaw: this.yaw, pose, hide: this.hide, scale: this.scale,
-      tint: this.flashT > 0 ? [1.3, 0.9, 0.85] : [1, 1, 1], partTint: this.partTint, lights: this.g.room.lightsFor(ci, this.x, this.y, this.z, boost) };
+      tint: this.flashT > 0 ? [1.3, 0.9, 0.85] : [1, 1, 1], partTint: this.partTint, roll: this.roll, lights: this.g.room.lightsFor(ci, this.x, this.y, this.z, boost, this.g.lampList?.filter(l => l.owner !== this || l.self)) };
   }
 }
 
@@ -86,7 +86,7 @@ export class Player extends Actor {
   status() { const h = this.S.hp; return h > 66 ? 'FINE' : h > 33 ? 'CAUTION' : 'DANGER'; }
   updateHide() {
     const items = this.g.A.content.items;
-    this.hide = new Set(Object.values(items).filter(i => i.weapon).map(i => i.weapon.part));
+    this.hide = new Set([...Object.values(items).filter(i => i.weapon).map(i => i.weapon.part), 'handset', 'cellphone']);   // phones: cutscene props only
     const w = this.weapon();
     if (w && (this.mode === 'aim' || this.mode === 'fire')) this.hide.delete(w.part);
   }
@@ -94,8 +94,11 @@ export class Player extends Actor {
   updateInfection() {
     const k = Math.min(1, (this.S.infection || 0) / 100);
     if (k <= 0) { this.partTint = null; return; }
-    const red = (a) => [1 + 0.35 * a, 1 - 0.45 * a, 1 - 0.45 * a];
-    this.partTint = { hand_r: red(Math.min(1, k * 3)), forearm_r: red(Math.max(0, Math.min(1, k * 2 - 0.3))), upperarm_r: red(Math.max(0, k * 1.6 - 0.8)) };
+    // inflamed round the bite first, then necrotic black as it climbs ("black to the elbow")
+    const mix = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t), SORE = [1.1, 0.76, 0.8], DEAD = [0.07, 0.06, 0.07];
+    const rot = (a) => a < 0.35 ? mix([1, 1, 1], SORE, a / 0.35) : mix(SORE, DEAD, (a - 0.35) / 0.65);
+    // (the hand is mostly dead by the hospital, ~17%; the forearm by the lab, ~45%)
+    this.partTint = { hand_r: rot(Math.min(1, k * 5)), forearm_r: rot(Math.max(0, Math.min(1, k * 3 - 0.2))), upperarm_r: rot(Math.max(0, Math.min(1, k * 2 - 0.5))) };
   }
   hurt(dmg, opts = {}) {
     if (this.mode === 'dead' || this.g.god) return;
@@ -231,11 +234,11 @@ export class Enemy extends Actor {
   constructor(g, spec) {
     const def = g.A.content.actors[spec.type];
     if (!def) throw new Error('unknown actor type ' + spec.type);
-    let [x, y] = spec.through || def.behavior === 'prop' ? spec.at : g.room.nearestWalkable(spec.at[0], spec.at[1]);
+    let [x, y] = spec.through || (spec.behavior || def.behavior) === 'prop' ? spec.at : g.room.nearestWalkable(spec.at[0], spec.at[1]);
     const face = spec.face === 'player' && g.player ? [g.player.x, g.player.y] : Array.isArray(spec.face) ? spec.face : null;
     const yaw = face ? yawTo(x, y, face[0], face[1]) : (spec.yaw || 0);
     super(g, def.model, def.clips, x, y, yaw);
-    Object.assign(this, { id: spec.id, type: spec.type, def, room: spec.room, B: def.behavior || 'shambler' });
+    Object.assign(this, { id: spec.id, type: spec.type, def, room: spec.room, B: spec.behavior || def.behavior || 'shambler' });   // a spawn may freeze its type as a posed prop (the ER crowd at the glass)
     this.hp = spec.hp ?? def.hp ?? 1; this.scale = def.scale || 1; this.r = def.radius || 0.3; this.wig = def.wiggle || 1;
     const idleByDefault = ['chaser', 'leaper', 'hazard', 'npc', 'prop', 'target'].includes(this.B);
     this.state = spec.state || (spec.face === 'player' || !idleByDefault ? 'chase' : 'idle');
@@ -246,14 +249,22 @@ export class Enemy extends Actor {
     this.poseName = pn || undefined;
     if (spec.state === 'dead') {                                    // a corpse: lie where it fell
       this.state = 'dead'; this.anim.play('death', { restart: true, fade: 0 }); this.anim.t = 99;
+      if (!this.staticPose) this.staticPose = g.A.poses[def.model]?.dead || null;
     }
+    this.roll = spec.roll || 0;                                      // e.g. a wreck on its side
+    this.speed = spec.speed;                                        // a spawn can outpace its type (the Amalgam in the open street)
     this.hidden = this.state === 'perched';
+    if (spec.z) this.z += spec.z;                                  // props set on a table or bench
+    this.zOff = spec.z || 0;
+    this.perchZ = spec.perch_z ?? 0;                               // leapers crouched up on a balcony, in plain sight
+    if (this.state === 'perched' && this.perchZ) { this.hidden = false; this.z = g.room.floor(x, y) + this.perchZ; }
     this.wake = spec.wake_rect || null;
     this.t = 0; this.hitDone = false; this.cool = 0; this.flowT = 0; this.voice = 1 + Math.random() * 3;
     this.jitter = [(Math.random() - 0.5) * 1.2, (Math.random() - 0.5) * 1.2];
     if (this.state !== 'dead') this.anim.play(this.state === 'rise' ? 'rise' : 'idle', { restart: true, fade: 0 });
     this.firedHp = {}; this.follow = !!spec.follow;
     this.hide = new Set(spec.hide || def.hide || []);            // e.g. a holstered pistol on an NPC
+    this.lampsOff = spec.lamps === false;                         // a parked car sits dark until a script turns it on
   }
   alive() { return this.state !== 'dead' && this.state !== 'gone'; }
   hostile() { return this.alive() && this.B !== 'npc' && this.B !== 'prop' && this.state !== 'perched'; }
@@ -261,7 +272,10 @@ export class Enemy extends Actor {
   snapshot() {
     return { type: this.type, room: this.room, at: [this.x, this.y], yaw: this.yaw, hp: this.hp,
       state: !this.alive() ? this.state : ['idle', 'perched'].includes(this.state) ? this.state : this.B === 'npc' ? 'idle' : 'chase',
-      follow: this.follow || undefined, pose: this.poseName };
+      behavior: this.B !== (this.def.behavior || 'shambler') ? this.B : undefined,
+      follow: this.follow || undefined, pose: this.poseName, lamps: this.lampsOff ? false : undefined,
+      perch_z: this.state === 'perched' ? this.perchZ || undefined : undefined,
+      roll: this.roll || undefined, z: this.zOff || undefined, speed: this.speed };                    // a wreck stays on its side, a wheel on its spindle
   }
   alert() { if (this.state === 'idle' && this.B !== 'npc') this.state = 'chase'; }
   stagger(t) { if (this.alive() && this.B !== 'hazard') { this.state = 'hurt'; this.t = t; this.anim.play('hurt', { restart: true, fade: 0.04 }); } }
@@ -277,7 +291,8 @@ export class Enemy extends Actor {
     if (this.state === 'gone') return;                        // a script replaced this enemy (the Swollen Man bursting)
     if (this.hp <= 0) {
       if (this.state === 'grab') g.player.releaseGrab(false);
-      this.state = 'dead'; this.anim.play('death', { restart: true, fade: 0.05 }); g.onEnemyDead(this); return;
+      this.state = 'dead'; this.staticPose = null; this.poseName = undefined;          // off its meal: fall, then lie flat
+      this.anim.play('death', { restart: true, fade: 0.05 }); g.onEnemyDead(this); return;
     }
     const staggers = def.invulnerable || heavy || (this.state !== 'attack' && this.state !== 'grab' && this.state !== 'spit' && !def.no_flinch);
     if (this.B === 'brute' && !heavy) return;                // the boss shrugs off pistol rounds
@@ -294,8 +309,14 @@ export class Enemy extends Actor {
   update() {
     const g = this.g, p = g.player, def = this.def;
     this.flashT = Math.max(0, this.flashT - DT);
+    if (this.state === 'fall') {                                   // off a ledge into the dark (the skybridge)
+      this.vz -= 9.8 * DT; this.z += this.vz * DT; this.yaw += 40 * DT; this.anim.update(DT);
+      if (this.z < g.room.floor(this.x, this.y) - 45) this.state = 'gone';
+      return;
+    }
     if (this.updateScripted()) return;
     this.anim.update(DT);
+    if (this.state === 'dead' && !this.staticPose && this.anim.done()) this.staticPose = g.A.poses[def.model]?.dead || null;   // settle flat, not arms-out like a plank
     if (!this.alive() || g.cinematic || this.B === 'prop' || this.B === 'target') return;
     if (this.B === 'npc') return this.updateNpc();
     const dx = p.x - this.x, dy = p.y - this.y, dist = Math.hypot(dx, dy);
@@ -315,11 +336,23 @@ export class Enemy extends Actor {
         }
         return;
       }
-      case 'drop': if (this.anim.done()) this.state = 'chase'; return;
+      case 'drop': {                                          // off the perch: fall to the street, land, then come
+        const fl = g.room.floor(this.x, this.y);
+        if (this.z > fl + 0.01) {
+          this.vz = (this.vz || 0) - 9.8 * DT; this.z = Math.max(fl, this.z + this.vz * DT);
+          if (this.z === fl) { this.vz = 0; g.fx.shake = Math.max(g.fx.shake, 0.2); g.sfx('squelch', g.pan(this.x, this.y)); g.script.fire('enemy_land', { id: this.id }); }
+          return;
+        }
+        if (this.anim.done()) this.state = 'chase';
+        return;
+      }
       case 'idle': {
         const inWake = this.wake && p.x >= this.wake[0] && p.x <= this.wake[2] && p.y >= this.wake[1] && p.y <= this.wake[3];
         const sees = def.sight && dist < def.sight && g.room.los(this.x, this.y, p.x, p.y, 0.45);
-        if (inWake || sees) { this.state = 'chase'; if (def.voice === 'dog') g.sfx('bark', g.pan(this.x, this.y)); }
+        if (inWake || sees) {
+          this.state = 'chase'; if (def.voice === 'dog') g.sfx('bark', g.pan(this.x, this.y));
+          if (this.staticPose && this.B !== 'prop') { this.staticPose = null; this.poseName = undefined; this.cool = Math.max(this.cool, 0.8); }   // gets up from its meal
+        }
         if (this.B !== 'hazard') turnTo(this, face, 60);
         if (this.B === 'hazard') this.state = dist < (def.range || 1.8) + 1 ? 'chase' : 'idle';
         return;
@@ -384,7 +417,7 @@ export class Enemy extends Actor {
     }
     let [mx, my] = fwd(yawTo(this.x, this.y, tx, ty));
     if (dir) { [mx, my] = dir; turnTo(this, yawTo(0, 0, dir[0], dir[1]), (def.turn || 120) * 0.5); }
-    if (!keepAway && dist > def.range * 0.8 && (Math.abs(d) < 70 || dir || this.B === 'swarm')) this.move(mx * def.speed * DT, my * def.speed * DT);
+    if (!keepAway && dist > def.range * 0.8 && (Math.abs(d) < 70 || dir || this.B === 'swarm')) this.move(mx * (this.speed ?? def.speed) * DT, my * (this.speed ?? def.speed) * DT);
     this.anim.play(this.B === 'chaser' || this.B === 'swarm' || this.B === 'leaper' ? 'run' : 'walk', { fade: 0.15 });
   }
   // companions: keep near the player, shoot what's hunting you (def.gun), follow through doors
@@ -404,6 +437,7 @@ export class Enemy extends Actor {
         this.anim.play('aim', { fade: 0.1 });
         if (Math.abs(d) < 8 && this.cool <= 0) {
           this.cool = gun.cooldown || 0.9; g.sfx(gun.sfx || 'pistol'); best.damage(gun.damage || 3, false, this.yaw);
+          this.muzzleT = 2;                                             // frames of muzzle flash
         }
         return;
       }
