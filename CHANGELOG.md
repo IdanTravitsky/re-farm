@@ -1,5 +1,12 @@
 # Polish changes
 
+## Road encounter fix (29 Sep 2026)
+
+- Fix duplicate Katie actors during the deputy attack: replacing a scripted actor now retires every previous instance and clears stale targeting, grabs, movement and saved state.
+- Katie gets up from her feeding pose and visibly escapes around the wagon, with collision enabled and camera cuts following her into the woods. Dialogue no longer interrupts and replaces her escape movement.
+- Remove Katie completely after the escape, including on subsequent room reloads.
+- Add regression coverage for the full encounter with normal pistol fire, vehicle clearance throughout the escape, actor replacement, and offscreen replacement.
+
 ## Round 5 (Claude, 28 Sep 2026): building on the Enhanced renderer
 
 - Every scene now has a true 640x480 Enhanced plate (202 cameras, JPEG, decoded by the browser), plus HD pickup sprites. They are cut from the raw renders the pipeline already made, so nothing needed re-rendering. Classic 320x240 is unchanged.

@@ -345,6 +345,7 @@ export class Enemy extends Actor {
   }
 
   update() {
+    if (this.state === 'gone') return;
     const g = this.g, p = g.player, def = this.def;
     this.flashT = Math.max(0, this.flashT - DT);
     if (this.state === 'fall') {                                   // off a ledge into the dark (the skybridge)

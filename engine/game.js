@@ -172,10 +172,11 @@ export class Game {
     if (c) { s.at = c.at; s.room = c.room; s.yaw ??= c.yaw; s.through = true; }
     const src = spec.at_actor && this.enemies.find(e => e.id === spec.at_actor);
     if (src) { const j = spec.jitter ?? 0.8; s.at = [src.x + (Math.random() - 0.5) * 2 * j, src.y + (Math.random() - 0.5) * 2 * j]; }
-    delete this.state.dead[s.id]; delete this.state.corpses[s.id];
+    // Scripted replacements retain their ID. Retire the previous actor before
+    // adding its replacement so subsequent actions cannot select a stale copy.
+    this.removeEnemy(s.id);
+    delete this.state.dead[s.id];
     if (s.room !== this.state.room) { this.state.enemies[s.id] = { ...s, yaw: s.yaw || 0, state: s.state || 'chase' }; return; }
-    const old = this.enemies.find(e => e.id === s.id);
-    if (old) old.state = 'gone';
     const e = new Enemy(this, s);
     this.enemies.push(e);
     const p = this.player;
@@ -186,8 +187,12 @@ export class Game {
     return e;
   }
   removeEnemy(id) {
-    const e = this.enemies.find(x => x.id === id);
-    if (e) e.state = 'gone';
+    if (this.player?.grab?.e.id === id) this.player.releaseGrab(false);
+    if (this.player?.target?.id === id) this.player.target = null;
+    for (const e of this.enemies) if (e.id === id) {
+      e.state = 'gone'; e.scripted = null; e.arrived = true;
+    }
+    this.enemies = this.enemies.filter(e => e.id !== id);
     delete this.state.enemies[id];
     if (this.state.corpses) delete this.state.corpses[id];
     this.state.dead[id] = true;
